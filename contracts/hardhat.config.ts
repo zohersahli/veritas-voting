@@ -51,6 +51,14 @@ const config: HardhatUserConfig = {
       chainType: "l1",
     },
 
+    localhost: {
+      type: "http",
+      chainType: "l1",
+      url: "http://127.0.0.1:8545",
+      accounts: process.env.PRIVATE_KEY ? [process.env.PRIVATE_KEY] : [],
+    },
+
+
     // -------------------------------------------------------------------------
     // Ethereum Sepolia — Layer 1
     // هنا يتم تخزين نتيجة التصويت النهائية (Finalization Layer).
