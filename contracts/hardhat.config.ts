@@ -1,6 +1,6 @@
 import type { HardhatUserConfig } from "hardhat/config";
-import "@nomicfoundation/hardhat-ethers";          // للتعامل مع Ethers داخل Hardhat — Ethers integration for Hardhat
-import "@nomicfoundation/hardhat-ignition";        // لإدارة عملية النشر باستخدام Ignition — Modern deployment modules
+import hardhatEthers from "@nomicfoundation/hardhat-ethers";
+import hardhatIgnition from "@nomicfoundation/hardhat-ignition";
 import * as dotenv from "dotenv";
 
 dotenv.config();
@@ -28,12 +28,14 @@ dotenv.config();
 // -----------------------------------------------------------------------------
 
 const config: HardhatUserConfig = {
+  plugins: [hardhatEthers, hardhatIgnition],
   solidity: {
-    version: "0.8.28", // نسخة Solidity الأساسية — Primary Solidity version
+    version: "0.8.31", // نسخة Solidity الأساسية — Primary Solidity version
     settings: {
       optimizer: {
         enabled: true,   // تفعيل المُحسّن — Enable optimizer
         runs: 200,       // إعداد مناسب لعقود الحوكمة — Suitable for governance contracts
+
       },
     },
   },
