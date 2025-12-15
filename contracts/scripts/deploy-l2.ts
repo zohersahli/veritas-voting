@@ -1,26 +1,35 @@
 import { network } from "hardhat";
 
+function getNetworkNameFromArgs(): string {
+  const idx = process.argv.indexOf("--network");
+  if (idx !== -1 && process.argv[idx + 1]) return String(process.argv[idx + 1]).trim();
+  return "";
+}
+
 async function main() {
   const { ethers } = await network.connect();
 
-  // Safety switch: prevent accidental testnet deploy
-  // مفتاح أمان: يمنع النشر على testnet بالغلط
+  // Real chainId from provider
+  const netInfo = await ethers.provider.getNetwork();
+  const chainId = netInfo.chainId; // bigint (ethers v6)
+
+  // Best-effort network name (CLI first, then env, else fallback)
+  const cliName = getNetworkNameFromArgs();
+  const envName = (process.env.HARDHAT_NETWORK ?? "").trim();
+  const networkName = cliName || envName || "hardhat";
+
+  // Local detection
+  const isLocalByName = networkName.startsWith("hardhat");
+  const isLocalByChainId = chainId === 31337n;
+  const isLocal = isLocalByName || isLocalByChainId;
+
+  // Safety switch
   const confirm = (process.env.CONFIRM_TESTNET_DEPLOY ?? "").trim();
-
-const netName = (process.env.HARDHAT_NETWORK ?? "hardhat").trim();
-
-  // Allow local hardhat deploys always
-  // السماح دائما بالنشر المحلي على hardhat
-  const isLocal = netName === "hardhat" || netName === "hardhatMainnet" || netName === "hardhatOp";
-
-  // If it's a real testnet (like baseSepolia), require confirmation
-  // إذا كانت شبكة حقيقية مثل baseSepolia, لازم تأكيد يدوي
-  if (!isLocal) {
-    if (confirm !== "YES") {
-      throw new Error(
-        `Refusing to deploy to "${netName}". Set CONFIRM_TESTNET_DEPLOY="YES" in .env to allow.`
-      );
-    }
+  if (!isLocal && confirm !== "YES") {
+    throw new Error(
+      `Refusing to deploy. network="${networkName}", chainId=${chainId.toString()}. ` +
+        `Set CONFIRM_TESTNET_DEPLOY="YES" in .env to allow.`
+    );
   }
 
   const VeritasCore = await ethers.getContractFactory("VeritasCore");
@@ -28,7 +37,8 @@ const netName = (process.env.HARDHAT_NETWORK ?? "hardhat").trim();
   await core.waitForDeployment();
 
   const coreAddress = await core.getAddress();
-  console.log(`Network: ${netName}`);
+  console.log(`Network: ${networkName}`);
+  console.log(`ChainId: ${chainId.toString()}`);
   console.log("VeritasCore (L2):", coreAddress);
   console.log("Done.");
 }
