@@ -1,5 +1,5 @@
 import { network } from "hardhat";
-import { saveDeployment } from "./utils/saveDeployment";
+import { saveDeployment } from "./utils/saveDeployment.js";
 
 function getNetworkNameFromArgs(): string {
   const idx = process.argv.indexOf("--network");
@@ -26,7 +26,7 @@ async function main() {
   const treasury = process.env.TREASURY_ADDRESS ?? "";
   const compensationStr = process.env.EXECUTOR_COMPENSATION_WEI ?? "";
 
-  if (!treasury || !ethers.isAddress(treasury) || treasury === "0x0000000000000000000000000000000000000000") {
+  if (!treasury || !ethers.isAddress(treasury) || treasury === ethers.ZeroAddress) {
   throw new Error("TREASURY_ADDRESS must be a valid 0x address");
  }
 
@@ -47,16 +47,6 @@ async function main() {
   console.log("PlatformConfig:", platformConfigAddress);
 
   // -----------------------------
-  // Deploy L1ResultRegistry
-  // -----------------------------
-  const L1ResultRegistry = await ethers.getContractFactory("L1ResultRegistry");
-  const l1ResultRegistry = await L1ResultRegistry.deploy();
-  await l1ResultRegistry.waitForDeployment();
-
-  const registryAddress = await l1ResultRegistry.getAddress();
-  console.log("L1ResultRegistry:", registryAddress);
-
-  // -----------------------------
   // Deploy L1FinalizationEscrow
   // -----------------------------
   const L1FinalizationEscrow = await ethers.getContractFactory("L1FinalizationEscrow");
@@ -67,6 +57,29 @@ async function main() {
   console.log("L1FinalizationEscrow:", escrowAddress);
 
   // -----------------------------
+  // Deploy L1ResultRegistry
+  // -----------------------------
+  const L1ResultRegistry = await ethers.getContractFactory("L1ResultRegistry");
+  const l1ResultRegistry = await L1ResultRegistry.deploy(escrowAddress);
+  await l1ResultRegistry.waitForDeployment();
+
+  const registryAddress = await l1ResultRegistry.getAddress();
+  console.log("L1ResultRegistry:", registryAddress);
+
+
+  // -----------------------------
+  // Link Escrow -> Registry (ONE TIME)
+  // -----------------------------
+  const currentRegistry: string = await escrow.registry();
+  if (currentRegistry === ethers.ZeroAddress) {
+    const tx = await escrow.setRegistry(registryAddress);
+    await tx.wait();
+    console.log("Escrow registry set to:", registryAddress);
+  } else {
+    console.log("Escrow registry already set:", currentRegistry, "(skipping)");
+  }
+
+  // -----------------------------
   // Save deployment
   // -----------------------------
   const savedPath = await saveDeployment({
@@ -75,8 +88,9 @@ async function main() {
     layer: "l1",
     contracts: {
       PlatformConfig: platformConfigAddress,
-      L1ResultRegistry: registryAddress,
       L1FinalizationEscrow: escrowAddress,
+      L1ResultRegistry: registryAddress,
+      
     },
   });
 

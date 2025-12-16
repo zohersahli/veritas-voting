@@ -55,8 +55,14 @@ const config: HardhatUserConfig = {
       type: "http",
       chainType: "l1",
       url: "http://127.0.0.1:8545",
-      accounts: process.env.PRIVATE_KEY ? [process.env.PRIVATE_KEY] : [],
+      //accounts: process.env.PRIVATE_KEY ? [process.env.PRIVATE_KEY] : [],
+      accounts: {
+      mnemonic: "test test test test test test test test test test test junk",
+      count: 10,
+      },
     },
+
+    
 
 
     // -------------------------------------------------------------------------

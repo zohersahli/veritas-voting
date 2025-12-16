@@ -22,3 +22,6 @@
 # Local secrets
 .env
 .env.*
+
+
+deployments/localhost.json
