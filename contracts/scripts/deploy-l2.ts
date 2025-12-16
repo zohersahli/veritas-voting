@@ -1,4 +1,5 @@
 import { network } from "hardhat";
+import { saveDeployment } from "./utils/saveDeployment";
 
 function getNetworkNameFromArgs(): string {
   const idx = process.argv.indexOf("--network");
@@ -40,6 +41,21 @@ async function main() {
   console.log(`Network: ${networkName}`);
   console.log(`ChainId: ${chainId.toString()}`);
   console.log("VeritasCore (L2):", coreAddress);
+
+
+  // -----------------------------
+  // Save deployment
+  // -----------------------------
+  const savedPath = await saveDeployment({
+    network: networkName,
+    chainId,
+    layer: "l2",
+    contracts: {
+      VeritasCore: coreAddress,
+    },
+  });
+
+  console.log("Saved:", savedPath);
   console.log("Done.");
 }
 

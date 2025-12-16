@@ -1,7 +1,24 @@
 import { network } from "hardhat";
+import { saveDeployment } from "./utils/saveDeployment";
+
+function getNetworkNameFromArgs(): string {
+  const idx = process.argv.indexOf("--network");
+  if (idx !== -1 && process.argv[idx + 1]) return String(process.argv[idx + 1]).trim();
+  return "";
+}
 
 async function main() {
   const { ethers } = await network.connect();
+
+ // Best-effort network name (CLI first, then env, else fallback)
+  const cliName = getNetworkNameFromArgs();
+  const envName = (process.env.HARDHAT_NETWORK ?? "").trim();
+  const networkName = cliName || envName || "hardhat";
+
+  // Real chainId from provider
+  const netInfo = await ethers.provider.getNetwork();
+  const chainId = netInfo.chainId;
+
 
   // -----------------------------
   // Read config from .env
@@ -49,6 +66,23 @@ async function main() {
   const escrowAddress = await escrow.getAddress();
   console.log("L1FinalizationEscrow:", escrowAddress);
 
+  // -----------------------------
+  // Save deployment
+  // -----------------------------
+  const savedPath = await saveDeployment({
+    network: networkName,
+    chainId,
+    layer: "l1",
+    contracts: {
+      PlatformConfig: platformConfigAddress,
+      L1ResultRegistry: registryAddress,
+      L1FinalizationEscrow: escrowAddress,
+    },
+  });
+
+  console.log(`Network: ${networkName}`);
+  console.log(`ChainId: ${chainId.toString()}`);
+  console.log("Saved:", savedPath);
   console.log("Done.");
 }
 
