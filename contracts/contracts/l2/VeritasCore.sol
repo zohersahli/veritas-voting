@@ -27,13 +27,13 @@ contract VeritasCore is
         address router,
         address link,
         uint64 destSelector,
-        address l1Receiver,
-        address treasury,
-        uint256 receiverGasLimit
+        address _l1Receiver,
+        address _treasury,
+        uint256 _receiverGasLimit
     )
     
         Ownable(msg.sender)
-        CcipEscrowSenderL2(router, link, destSelector, l1Receiver, treasury, receiverGasLimit)
+        CcipEscrowSenderL2(router, link, destSelector, _l1Receiver, _treasury, _receiverGasLimit)
     {}
 
     function pause() external onlyOwner {

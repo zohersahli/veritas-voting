@@ -23,5 +23,7 @@
 .env
 .env.*
 
+# Solidity compiler binary (large file, can be downloaded)
+/tools/solc/
 
 deployments/localhost.json

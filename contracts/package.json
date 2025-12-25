@@ -17,6 +17,7 @@
     "ethers": "^6.16.0",
     "hardhat": "^3.1.0",
     "mocha": "^11.7.5",
+    "solc": "^0.8.33",
     "typescript": "~5.8.0"
   },
   "dependencies": {

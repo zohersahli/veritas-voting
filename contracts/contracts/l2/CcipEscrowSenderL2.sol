@@ -55,10 +55,10 @@ abstract contract CcipEscrowSenderL2 is Polls, FinalizationL2, Ownable, Pausable
     // -----------------------------
     // Storage: Config
     // -----------------------------
-    IRouterClient public ccipRouter;
-    IERC20 public linkToken;
+    IRouterClient public immutable ccipRouter;
+    IERC20 public immutable linkToken;
 
-    uint64 public destinationChainSelector;
+    uint64 public immutable destinationChainSelector;
     address public l1Receiver;
     address public treasury;
 
@@ -85,8 +85,6 @@ abstract contract CcipEscrowSenderL2 is Polls, FinalizationL2, Ownable, Pausable
         uint256 deposited;
         uint256 reservedMaxFee;
         uint256 reservedPlatform;
-
-        bytes32 messageId;
     }
 
     mapping(uint256 => Escrow) public escrows;
@@ -271,8 +269,7 @@ abstract contract CcipEscrowSenderL2 is Polls, FinalizationL2, Ownable, Pausable
             groupId: groupId,
             deposited: escrowDeposited,
             reservedMaxFee: maxFee,
-            reservedPlatform: platformFee,
-            messageId: bytes32(0)
+            reservedPlatform: platformFee
         });
 
         emit EscrowLocked(pollId, groupId, msg.sender, escrowDeposited, maxFee, platformFee);
@@ -322,15 +319,13 @@ abstract contract CcipEscrowSenderL2 is Polls, FinalizationL2, Ownable, Pausable
 
         // effects before external call
         e.sent = true;
-
-        messageId = ccipRouter.ccipSend(destinationChainSelector, message);
-        e.messageId = messageId;
-
         e.deposited -= fee;
 
         if (r.status != ResultStatus.Passed) {
             e.reservedPlatform = 0;
         }
+
+        messageId = ccipRouter.ccipSend(destinationChainSelector, message);
 
         emit ResultSentToL1(pollId, messageId, fee);
     }
@@ -439,14 +434,16 @@ abstract contract CcipEscrowSenderL2 is Polls, FinalizationL2, Ownable, Pausable
         (uint256 groupId, uint256 pollId, uint8 statusRaw, bytes32 resultHash, bytes32 inboundMessageId) =
             abi.decode(message.data, (uint256, uint256, uint8, bytes32, bytes32));
 
+        // Keep decode stable for audit clarity (statusRaw and resultHash not used in ACK processing)
+        // slither-disable-next-line redundant-statements
+        statusRaw;
+        // slither-disable-next-line redundant-statements
+        resultHash;
+
         bytes32 k = keccak256(abi.encode(groupId, pollId));
         if (ackReceived[k]) revert AckAlreadyProcessed(k);
 
         ackReceived[k] = true;
-
-        // keep decode stable for audit clarity
-        statusRaw;
-        resultHash;
 
         emit L1AckReceived(k, groupId, pollId, inboundMessageId, message.messageId);
     }

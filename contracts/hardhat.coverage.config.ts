@@ -4,16 +4,17 @@ import hardhatIgnition from "@nomicfoundation/hardhat-ignition";
 import hardhatToolboxMochaEthers from "@nomicfoundation/hardhat-toolbox-mocha-ethers";
 import * as dotenv from "dotenv";
 
+
 dotenv.config();
 
 // -----------------------------------------------------------------------------
 // Coverage-specific configuration
-// EN: This config uses Solidity 0.8.30 for coverage compatibility.
-// AR: هذا الإعداد يستخدم Solidity 0.8.30 لتوافق coverage.
+//  This config uses Solidity 0.8.30 for coverage compatibility.
+//  هذا الإعداد يستخدم Solidity 0.8.30 لتوافق coverage.
 // -----------------------------------------------------------------------------
 // NOTE: Use this config only for coverage: npx hardhat coverage --config hardhat.coverage.config.ts
-// EN: Coverage tool currently doesn't support Solidity 0.8.31, so we use 0.8.30 here.
-// AR: أداة coverage لا تدعم Solidity 0.8.31 حالياً، لذا نستخدم 0.8.30 هنا.
+//  Coverage tool currently doesn't support Solidity 0.8.31, so we use 0.8.30 here.
+//  أداة coverage لا تدعم Solidity 0.8.31 حالياً، لذا نستخدم 0.8.30 هنا.
 // -----------------------------------------------------------------------------
 
 const config: HardhatUserConfig = {
