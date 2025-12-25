@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity 0.8.31;
+pragma solidity ^0.8.30;
 
 /// @title SharedErrors (L2) | أخطاء مشتركة على L2
 /// @notice Common custom errors shared across L2 modules (skeleton).

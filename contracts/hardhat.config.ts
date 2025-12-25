@@ -1,6 +1,7 @@
 import type { HardhatUserConfig } from "hardhat/config";
 import hardhatEthers from "@nomicfoundation/hardhat-ethers";
 import hardhatIgnition from "@nomicfoundation/hardhat-ignition";
+import hardhatToolboxMochaEthers from "@nomicfoundation/hardhat-toolbox-mocha-ethers";
 import * as dotenv from "dotenv";
 
 dotenv.config();
@@ -28,7 +29,8 @@ dotenv.config();
 // -----------------------------------------------------------------------------
 
 const config: HardhatUserConfig = {
-  plugins: [hardhatEthers, hardhatIgnition],
+  plugins: [hardhatEthers, hardhatIgnition ,
+    hardhatToolboxMochaEthers],
   solidity: {
     version: "0.8.31", // نسخة Solidity الأساسية — Primary Solidity version
     settings: {
@@ -37,6 +39,7 @@ const config: HardhatUserConfig = {
         runs: 200,       // إعداد مناسب لعقود الحوكمة — Suitable for governance contracts
 
       },
+      viaIR: true, // تحسين إضافي عبر IR — Additional optimization via IR
     },
   },
 

@@ -2,6 +2,9 @@
   "name": "contracts",
   "version": "1.0.0",
   "type": "module",
+  "scripts": {
+    "coverage": "hardhat coverage --config hardhat.coverage.config.ts"
+  },
   "devDependencies": {
     "@nomicfoundation/hardhat-ethers": "^4.0.3",
     "@nomicfoundation/hardhat-ignition": "^3.0.6",
@@ -12,12 +15,13 @@
     "@types/node": "^22.19.2",
     "chai": "^5.3.3",
     "ethers": "^6.16.0",
-    "forge-std": "github:foundry-rs/forge-std#v1.9.4",
     "hardhat": "^3.1.0",
     "mocha": "^11.7.5",
     "typescript": "~5.8.0"
   },
   "dependencies": {
+    "@chainlink/contracts-ccip": "^1.6.4",
+    "@openzeppelin/contracts": "^5.4.0",
     "dotenv": "^17.2.3"
   }
 }

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity 0.8.31;
+pragma solidity ^0.8.30;
 
 /// @title QuorumMath | حسابات النصاب
 /// @notice Basis points (BPS) helpers for quorum calculations (skeleton).
