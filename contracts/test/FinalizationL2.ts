@@ -1,4 +1,4 @@
-﻿import { expect } from "chai";
+import { expect } from "chai";
 import { network } from "hardhat";
 import { parseEther } from "ethers";
 
@@ -17,6 +17,15 @@ describe("FinalizationL2 (Hardhat)", function () {
 
   async function setTime(ts: number) {
     await ethers.provider.send("evm_setNextBlockTimestamp", [ts]);
+    await ethers.provider.send("evm_mine", []);
+  }
+
+  async function setNext(ts: number) {
+    // IMPORTANT: do NOT mine here
+    await ethers.provider.send("evm_setNextBlockTimestamp", [ts]);
+  }
+
+  async function mine() {
     await ethers.provider.send("evm_mine", []);
   }
 
@@ -40,6 +49,12 @@ describe("FinalizationL2 (Hardhat)", function () {
     )) as any;
 
     return { core, link, owner, A, B, C };
+  }
+
+  async function deployHarness() {
+    const Harness = await ethers.getContractFactory("FinalizationHarness");
+    const h = (await Harness.deploy()) as any;
+    return { h };
   }
 
   async function setupGroupAndPoll(params?: {
@@ -92,71 +107,255 @@ describe("FinalizationL2 (Hardhat)", function () {
   }
 
   it("Cannot finalize before endTime", async () => {
-    const { core, pollId, startTime } = await setupGroupAndPoll();
+    const { core, owner, pollId, startTime } = await setupGroupAndPoll();
 
     // AR: ندخل داخل نافذة التصويت لكن قبل النهاية
     // EN: Move into voting window but before end
     await setTime(startTime + 1);
 
-    await expect(core.finalizePollOnL2(pollId)).to.revert(ethers);
+    await expect(core.connect(owner).finalizePollOnL2(pollId))
+      .to.be.revertedWithCustomError(core, "FinalizationPollNotEnded");
   });
 
-  it("Finalize works after endTime even if no votes (executes FailedQuorum path)", async () => {
-    const { core, pollId, endTime } = await setupGroupAndPoll();
+  it("Finalizes after endTime and computes winner correctly", async () => {
+    const { core, owner, pollId, endTime, A, B, C } = await setupGroupAndPoll();
 
-    // AR: بعد نهاية التصويت
-    // EN: After voting ends
+    // AR: ندخل نافذة التصويت ونصوت
+    // EN: Enter voting window and vote
+    await setTime(endTime - 500);
+    await (await core.connect(A).vote(pollId, 0n)).wait(); // YES
+    await (await core.connect(B).vote(pollId, 0n)).wait(); // YES
+    await (await core.connect(C).vote(pollId, 1n)).wait(); // NO
+
+    // AR: ننتظر حتى endTime وننهي
+    // EN: Wait until endTime and finalize
     await setTime(endTime + 1);
 
-    await (await core.finalizePollOnL2(pollId)).wait();
+    await expect(core.connect(owner).finalizePollOnL2(pollId))
+      .to.emit(core, "PollFinalized")
+      .withArgs(pollId, 1, 0n, 3n); // status=1 (Passed), winner=0 (YES), totalVotes=3
+
+    const result = await core.results(pollId);
+    expect(result.finalized).to.equal(true);
+    expect(result.winningOption).to.equal(0);
+    expect(result.totalVotes).to.equal(3n);
+    expect(result.status).to.equal(1); // Passed
   });
 
-  it("Finalize works after endTime with votes (quorum disabled path)", async () => {
-    const { core, A, B, pollId, startTime, endTime } = await setupGroupAndPoll({
-      quorumEnabled: false,
-      quorumPercentage: 0
-    });
-
-    await setTime(startTime + 1);
-
-    // AR: تصويتين على YES
-    // EN: Two votes on YES
-    await (await core.connect(A).vote(pollId, 0)).wait();
-    await (await core.connect(B).vote(pollId, 0)).wait();
-
-    await setTime(endTime + 1);
-
-    await (await core.finalizePollOnL2(pollId)).wait();
-  });
-
-  it("Finalize works after endTime with quorum enabled (executes quorum math path)", async () => {
-    const { core, A, pollId, startTime, endTime } = await setupGroupAndPoll({
+  it("Quorum enabled: fails when total votes < required", async () => {
+    const { core, owner, pollId, endTime, A } = await setupGroupAndPoll({
       quorumEnabled: true,
-      quorumPercentage: 60
+      quorumPercentage: 5000, // 50%
     });
 
-    await setTime(startTime + 1);
-
-    // AR: صوت واحد فقط, غالبا لن يحقق النصاب
-    // EN: Only one vote, likely fails quorum
-    await (await core.connect(A).vote(pollId, 0)).wait();
+    // AR: eligibleCount = 4 (owner + A + B + C), required = ceil(4 * 5000 / 10000) = 2
+    // EN: eligibleCount = 4, required = ceil(4 * 5000 / 10000) = 2
+    // AR: نصوت صوت واحد فقط (أقل من المطلوب)
+    // EN: Vote only once (less than required)
+    await setTime(endTime - 500);
+    await (await core.connect(A).vote(pollId, 0n)).wait();
 
     await setTime(endTime + 1);
 
-    await (await core.finalizePollOnL2(pollId)).wait();
+    await expect(core.connect(owner).finalizePollOnL2(pollId))
+      .to.emit(core, "PollFinalized")
+      .withArgs(pollId, 2, 0n, 1n); // status=2 (FailedQuorum), winner=0, totalVotes=1
+
+    const result = await core.results(pollId);
+    expect(result.status).to.equal(2); // FailedQuorum
   });
 
-  it("Cannot finalize twice (idempotency)", async () => {
-    const { core, A, pollId, startTime, endTime } = await setupGroupAndPoll();
+  it("Quorum enabled: passes when total votes >= required", async () => {
+    const { core, owner, pollId, endTime, A, B } = await setupGroupAndPoll({
+      quorumEnabled: true,
+      quorumPercentage: 5000, // 50%
+    });
 
-    await setTime(startTime + 1);
-    await (await core.connect(A).vote(pollId, 0)).wait();
+    // AR: required = ceil(4 * 5000 / 10000) = 2
+    // EN: required = ceil(4 * 5000 / 10000) = 2
+    // AR: نصوت صوتين (يساوي المطلوب)
+    // EN: Vote twice (equals required)
+    await setTime(endTime - 500);
+    await (await core.connect(A).vote(pollId, 0n)).wait();
+    await (await core.connect(B).vote(pollId, 0n)).wait();
 
     await setTime(endTime + 1);
-    await (await core.finalizePollOnL2(pollId)).wait();
 
-    // AR: finalize مرة ثانية لازم يفشل
-    // EN: Second finalize must revert
-    await expect(core.finalizePollOnL2(pollId)).to.revert(ethers);
+    await expect(core.connect(owner).finalizePollOnL2(pollId))
+      .to.emit(core, "PollFinalized")
+      .withArgs(pollId, 1, 0n, 2n); // status=1 (Passed), winner=0, totalVotes=2
+
+    const result = await core.results(pollId);
+    expect(result.status).to.equal(1); // Passed
+  });
+
+  // From FinalizationL2.extra.ts
+  it("reverts: poll does not exist (FinalizationPollDoesNotExist)", async () => {
+    const { h } = await deployHarness();
+    await expect(h.finalizePollOnL2(1))
+      .to.be.revertedWithCustomError(h, "FinalizationPollDoesNotExist")
+      .withArgs(1);
+  });
+
+  it("reverts: poll not ended (FinalizationPollNotEnded) with args", async () => {
+    const { h } = await deployHarness();
+
+    const latest = await ethers.provider.getBlock("latest");
+    const now0 = Number(latest!.timestamp);
+
+    const pollId = 1;
+    const endTime = now0 + 100;
+
+    await h.setPoll(pollId, true, endTime, 2, false, 0);
+
+    const ts = endTime - 1;
+
+    // Only set timestamp for the tx block (do not mine)
+    await setNext(ts);
+
+    await expect(h.finalizePollOnL2(pollId))
+      .to.be.revertedWithCustomError(h, "FinalizationPollNotEnded")
+      .withArgs(pollId, endTime, ts);
+  });
+
+  it("reverts: zero options (FinalizationZeroOptions)", async () => {
+    const { h } = await deployHarness();
+
+    const latest = await ethers.provider.getBlock("latest");
+    const now0 = Number(latest!.timestamp);
+    const endTime = now0 + 100;
+
+    const pollId = 2;
+    await h.setPoll(pollId, true, endTime, 0, false, 0);
+
+    // set timestamp for tx block only
+    await setNext(endTime + 1);
+
+    await expect(h.finalizePollOnL2(pollId))
+      .to.be.revertedWithCustomError(h, "FinalizationZeroOptions")
+      .withArgs(pollId);
+  });
+
+  it("computes winner + totalVotes and tie-break stays on first max", async () => {
+    const { h } = await deployHarness();
+
+    const latest = await ethers.provider.getBlock("latest");
+    const now0 = Number(latest!.timestamp);
+    const endTime = now0 + 100;
+
+    const pollId = 3;
+    await h.setPoll(pollId, true, endTime, 3, false, 0);
+
+    // tie between option 0 and 1 -> winner should remain 0
+    await h.setVote(pollId, 0, 2);
+    await h.setVote(pollId, 1, 2);
+    await h.setVote(pollId, 2, 1);
+
+    await setNext(endTime + 1);
+    await (await h.finalizePollOnL2(pollId)).wait();
+
+    const r = await h.results(pollId);
+    expect(r.finalized).to.equal(true);
+    expect(r.winningOption).to.equal(0);
+    expect(r.totalVotes).to.equal(5);
+    expect(r.status).to.equal(1); // Passed
+  });
+
+  it("quorum enabled + supported eligible count: fails quorum when total < required", async () => {
+    const { h } = await deployHarness();
+
+    const latest = await ethers.provider.getBlock("latest");
+    const now0 = Number(latest!.timestamp);
+    const endTime = now0 + 100;
+
+    const pollId = 4;
+    await h.setPoll(pollId, true, endTime, 2, true, 6000); // 60%
+    await h.setEligible(pollId, true, 10); // required = ceil(10*6000/10000)=6
+
+    await h.setVote(pollId, 0, 5); // totalVotes=5 < 6
+
+    await setNext(endTime + 1);
+    await (await h.finalizePollOnL2(pollId)).wait();
+
+    const r = await h.results(pollId);
+    expect(r.status).to.equal(2); // FailedQuorum
+  });
+
+  it("forced invalid status: reverts with panic 0x21 (enum conversion)", async () => {
+    const { h } = await deployHarness();
+
+    const latest = await ethers.provider.getBlock("latest");
+    const now0 = Number(latest!.timestamp);
+    const endTime = now0 + 100;
+
+    const pollId = 5;
+    await h.setPoll(pollId, true, endTime, 2, false, 0);
+
+    // Using harness raw return to produce an invalid ResultStatus value
+    // Solidity throws panic 0x21 when converting invalid enum value
+    await h.setForcedRaw(pollId, 7);
+
+    await setNext(endTime + 1);
+
+    // Solidity throws panic 0x21 before reaching FinalizationInvalidFinalStatus check
+    await expect(h.finalizePollOnL2(pollId)).to.be.revertedWithPanic(0x21);
+  });
+
+  it("forced Passed with 0 votes becomes FailedQuorum (safety)", async () => {
+    const { h } = await deployHarness();
+
+    const latest = await ethers.provider.getBlock("latest");
+    const now0 = Number(latest!.timestamp);
+    const endTime = now0 + 100;
+
+    const pollId = 6;
+    await h.setPoll(pollId, true, endTime, 2, false, 0);
+    await h.setForcedRaw(pollId, 1); // Passed
+
+    await setNext(endTime + 1);
+    await (await h.finalizePollOnL2(pollId)).wait();
+
+    const r = await h.results(pollId);
+    expect(r.totalVotes).to.equal(0);
+    expect(r.status).to.equal(2); // FailedQuorum
+  });
+
+  it("quorum overflow: reverts FinalizationQuorumOverflow", async () => {
+    const { h } = await deployHarness();
+
+    const latest = await ethers.provider.getBlock("latest");
+    const now0 = Number(latest!.timestamp);
+    const endTime = now0 + 100;
+
+    const pollId = 7;
+    await h.setPoll(pollId, true, endTime, 1, true, 10000);
+    await h.setEligible(pollId, true, (2n ** 256n - 1n) / 10000n + 1n); // too large
+    await h.setVote(pollId, 0, 1); // ensure totalVotes > 0
+
+    await setNext(endTime + 1);
+
+    await expect(h.finalizePollOnL2(pollId))
+      .to.be.revertedWithCustomError(h, "FinalizationQuorumOverflow")
+      .withArgs(pollId);
+  });
+
+  it("reverts: already finalized (FinalizationAlreadyFinalized)", async () => {
+    const { h } = await deployHarness();
+
+    const latest = await ethers.provider.getBlock("latest");
+    const now0 = Number(latest!.timestamp);
+    const endTime = now0 + 100;
+
+    const pollId = 8;
+    await h.setPoll(pollId, true, endTime, 1, false, 0);
+    await h.setVote(pollId, 0, 1);
+
+    await setNext(endTime + 1);
+    await (await h.finalizePollOnL2(pollId)).wait();
+
+    await expect(h.finalizePollOnL2(pollId))
+      .to.be.revertedWithCustomError(h, "FinalizationAlreadyFinalized")
+      .withArgs(pollId);
   });
 });
+

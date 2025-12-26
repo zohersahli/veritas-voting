@@ -1,4 +1,4 @@
-﻿import { expect } from "chai";
+import { expect } from "chai";
 import { network } from "hardhat";
 
 const { ethers } = await network.connect();
@@ -19,12 +19,6 @@ describe("Groups (Hardhat)", function () {
     NFT: 1,
     ClaimCode: 2,
   } as const;
-
-  async function setNextTimestamp(ts: number) {
-    // EN: Set timestamp for the next mined block (the tx block).
-    // AR: نحدد وقت البلوك القادم (بلوك المعاملة نفسها).
-    await ethers.provider.send("evm_setNextBlockTimestamp", [ts]);
-  }
 
   async function deployHarness() {
     const [owner, other] = await ethers.getSigners();
@@ -51,6 +45,12 @@ describe("Groups (Hardhat)", function () {
     expect(await harness.groupExists(1n)).to.equal(true);
     expect(await harness.groupExists(999n)).to.equal(false);
   });
+
+  async function setNextTimestamp(ts: number) {
+    // EN: Set timestamp for the next mined block (the tx block).
+    // AR: نحدد وقت البلوك القادم (بلوك المعاملة نفسها).
+    await ethers.provider.send("evm_setNextBlockTimestamp", [ts]);
+  }
 
   it("createGroup: stores group fields, increments nextGroupId, emits GroupCreated", async () => {
     const { owner, harness } = await deployHarness();
@@ -95,3 +95,4 @@ describe("Groups (Hardhat)", function () {
     expect(g2.createdAt).to.equal(BigInt(ts2));
   });
 });
+

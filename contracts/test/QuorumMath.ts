@@ -1,4 +1,4 @@
-﻿import { expect } from "chai";
+import { expect } from "chai";
 import { network } from "hardhat";
 
 const { ethers } = await network.connect();
@@ -88,3 +88,4 @@ describe("QuorumMath (Hardhat)", function () {
     expect(await h.meets(10, 999, 0)).to.equal(true);
   });
 });
+

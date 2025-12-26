@@ -8,10 +8,10 @@
 
 ## Executive Summary
 
-Comprehensive testing was conducted on the Veritas smart contract system. All 127 tests pass successfully. Test coverage focuses on production code, with mocks excluded from coverage calculations (standard practice).
+Comprehensive testing was conducted on the Veritas smart contract system. All 121 tests pass successfully. Test coverage focuses on production code, with mocks excluded from coverage calculations (standard practice).
 
 **Key Metrics:**
-- ✅ 127 tests, all passing
+- ✅ 121 tests, all passing
 - ✅ Production code coverage: See details below
 - ✅ Mocks excluded from coverage (test utilities)
 
@@ -185,6 +185,7 @@ npx hardhat test --coverage --config hardhat.coverage.config.ts
 
 # Run specific test file
 npx hardhat test test/VeritasCore.ts
+# Note: All test files use .ts extension (previously .spec.ts)
 ```
 
 ### Test Environment
@@ -209,8 +210,8 @@ All tests pass successfully. The test suite provides comprehensive coverage of p
 
 ### Test Files
 
+**Test Files (13 files):**
 - `test/VeritasCore.ts`
-- `test/CcipEscrowSenderL2.ts`
 - `test/VeritasCcipReceiverRegistry.ts`
 - `test/Groups.ts`
 - `test/Membership.ts`
@@ -219,6 +220,17 @@ All tests pass successfully. The test suite provides comprehensive coverage of p
 - `test/Delegation.ts`
 - `test/FinalizationL2.ts`
 - `test/QuorumMath.ts`
+- `test/CcipEscrowSenderL2.ts`
+- `test/CcipEscrowSenderL2.extra.ts`
+- `test/CcipEscrowSenderL2.moreBranches.extra.ts`
+- `test/CcipEscrowSenderL2.constructor.extra.ts`
+
+**Helper Files:**
+- `test/helpers/deploy.ts`
+- `test/helpers/escrow.ts`
+- `test/helpers/groups.ts`
+- `test/helpers/time.ts`
+
 
 ### Coverage Configuration
 

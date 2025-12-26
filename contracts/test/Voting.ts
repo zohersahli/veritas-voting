@@ -1,10 +1,10 @@
-﻿import { expect } from "chai";
+import { expect } from "chai";
 import { network } from "hardhat";
 import { parseEther } from "ethers";
 
 const { ethers } = await network.connect();
 
-describe("Voting extra coverage (Hardhat)", function () {
+describe("Voting (Hardhat)", function () {
   let snapshotId: string;
 
   beforeEach(async () => {
@@ -16,7 +16,7 @@ describe("Voting extra coverage (Hardhat)", function () {
   });
 
   async function setTime(ts: number) {
-  await ethers.provider.send("evm_setNextBlockTimestamp", [ts]);
+    await ethers.provider.send("evm_setNextBlockTimestamp", [ts]);
   }
 
   async function deployCore() {
@@ -217,3 +217,4 @@ describe("Voting extra coverage (Hardhat)", function () {
     expect(count).to.equal(3n);
   });
 });
+

@@ -1,6 +1,6 @@
-﻿import { expect } from "chai";
+import { expect } from "chai";
 import { network } from "hardhat";
-import { parseEther } from "ethers";
+import { parseEther, id } from "ethers";
 
 const { ethers } = await network.connect();
 
@@ -42,101 +42,181 @@ describe("Membership (Hardhat)", function () {
   }
 
   describe("Views and type safety", function () {
-      async function getSlot(addr: string, slot: bigint) {
-        return await ethers.provider.getStorage(addr, slot);
-      }
+    async function getSlot(addr: string, slot: bigint) {
+      return await ethers.provider.getStorage(addr, slot);
+    }
 
-      async function setSlot(addr: string, slot: bigint, value32: string) {
-        await ethers.provider.send("hardhat_setStorageAt", [addr, ethers.toBeHex(slot), value32]);
-      }
+    async function setSlot(addr: string, slot: bigint, value32: string) {
+      await ethers.provider.send("hardhat_setStorageAt", [addr, ethers.toBeHex(slot), value32]);
+    }
 
-      function normHex32(x: string) {
-        const h = x.startsWith("0x") ? x.slice(2) : x;
-        return h.toLowerCase().padStart(64, "0");
-      }
+    function normHex32(x: string) {
+      const h = x.startsWith("0x") ? x.slice(2) : x;
+      return h.toLowerCase().padStart(64, "0");
+    }
 
-      // EN: Find the mapping slot index for `groups` by detecting the slot that contains owner address.
-      // AR: إيجاد رقم slot الخاص بـ mapping groups عبر مطابقة owner داخل التخزين.
-      async function findGroupsMappingSlotIndex(params: {
-        coreAddr: string;
-        groupId: bigint;
-        ownerAddr: string;
-        maxScan?: number;
-      }) {
-        const abi = ethers.AbiCoder.defaultAbiCoder();
-        const ownerTail = params.ownerAddr.toLowerCase().slice(2).padStart(40, "0");
+    // EN: Find the mapping slot index for `groups` by detecting the slot that contains owner address.
+    // AR: إيجاد رقم slot الخاص بـ mapping groups عبر مطابقة owner داخل التخزين.
+    async function findGroupsMappingSlotIndex(params: {
+      coreAddr: string;
+      groupId: bigint;
+      ownerAddr: string;
+      maxScan?: number;
+    }) {
+      const abi = ethers.AbiCoder.defaultAbiCoder();
+      const ownerTail = params.ownerAddr.toLowerCase().slice(2).padStart(40, "0");
 
-        const max = params.maxScan ?? 200;
-        for (let i = 0; i <= max; i++) {
-          const encoded = abi.encode(["uint256", "uint256"], [params.groupId, BigInt(i)]);
-          const base = BigInt(ethers.keccak256(encoded));
-          const slot1 = base + 1n; // Group struct slot1 (owner packed here)
-          const v = normHex32(await getSlot(params.coreAddr, slot1));
-          if (v.endsWith(ownerTail)) {
-            return { groupsSlotIndex: i, ownerPackedSlot: slot1, ownerPackedValueHex64: v };
-          }
+      const max = params.maxScan ?? 200;
+      for (let i = 0; i <= max; i++) {
+        const encoded = abi.encode(["uint256", "uint256"], [params.groupId, BigInt(i)]);
+        const base = BigInt(ethers.keccak256(encoded));
+        const slot1 = base + 1n; // Group struct slot1 (owner packed here)
+        const v = normHex32(await getSlot(params.coreAddr, slot1));
+        if (v.endsWith(ownerTail)) {
+          return { groupsSlotIndex: i, ownerPackedSlot: slot1, ownerPackedValueHex64: v };
         }
-        throw new Error("Could not locate groups mapping slot index (scan failed)");
       }
+      throw new Error("Could not locate groups mapping slot index (scan failed)");
+    }
 
-      // EN: Change the 1-byte enum right before the last 20 bytes (address) in the packed slot.
-      // AR: تعديل بايت واحد (membershipType) الموجود قبل العنوان مباشرة داخل slot المعبأ.
-      function overwriteMembershipTypeByte(packedHex64: string, newType: number) {
-        const hex = packedHex64; // 64 chars, no 0x
-        const typeHex = newType.toString(16).padStart(2, "0");
+    // EN: Change the 1-byte enum right before the last 20 bytes (address) in the packed slot.
+    // AR: تعديل بايت واحد (membershipType) الموجود قبل العنوان مباشرة داخل slot المعبأ.
+    function overwriteMembershipTypeByte(packedHex64: string, newType: number) {
+      const hex = packedHex64; // 64 chars, no 0x
+      const typeHex = newType.toString(16).padStart(2, "0");
 
-        // Layout assumption:
-        // [ .... | 1 byte membershipType | 20 bytes owner address ]
-        // owner = last 40 hex chars, type = 2 hex chars right before it
-        const typePos = 64 - 40 - 2; // 22
-        return hex.slice(0, typePos) + typeHex + hex.slice(typePos + 2);
-      }
+      // Layout assumption:
+      // [ .... | 1 byte membershipType | 20 bytes owner address ]
+      // owner = last 40 hex chars, type = 2 hex chars right before it
+      const typePos = 64 - 40 - 2; // 22
+      return hex.slice(0, typePos) + typeHex + hex.slice(typePos + 2);
+    }
 
-      it("reverts on missing group (covers onlyExistingGroup -> GroupDoesNotExist)", async () => {
-        const { core, A } = await deployCore();
-        await expect(core.isMember(999n, A.address)).to.be.revertedWithCustomError(core, "GroupDoesNotExist").withArgs(999n);
+    it("reverts on missing group (covers onlyExistingGroup -> GroupDoesNotExist)", async () => {
+      const { core, A } = await deployCore();
+      await expect(core.isMember(999n, A.address)).to.be.revertedWithCustomError(core, "GroupDoesNotExist").withArgs(999n);
+    });
+
+    it("strict isMember: reverts on MembershipTypeMismatch, succeeds when correct (fix overload ambiguity)", async () => {
+      const { core, owner, A } = await deployCore();
+
+      await core.connect(owner).createGroup("G", "D", 0); // Manual
+      const groupId = await core.nextGroupId();
+
+      // Wrong expected type: asking for NFT while actual is Manual
+      await expect(core["isMember(uint256,address,uint8)"](groupId, A.address, 1))
+        .to.be.revertedWithCustomError(core, "MembershipTypeMismatch")
+        .withArgs(0, 1);
+
+      // Correct expected type
+      expect(await core["isMember(uint256,address,uint8)"](groupId, A.address, 0)).to.equal(false);
+    });
+
+    it("isMember: covers UnsupportedMembershipType by storage poke (enum out of range)", async () => {
+      const { core, owner, A } = await deployCore();
+
+      await core.connect(owner).createGroup("G", "D", 0); // create valid group first
+      const groupId = await core.nextGroupId();
+
+      const coreAddr = await core.getAddress();
+
+      // Find packed slot that contains owner + membershipType
+      const found = await findGroupsMappingSlotIndex({
+        coreAddr,
+        groupId: BigInt(groupId),
+        ownerAddr: owner.address,
+        maxScan: 250,
       });
 
-      it("strict isMember: reverts on MembershipTypeMismatch, succeeds when correct (fix overload ambiguity)", async () => {
-        const { core, owner, A } = await deployCore();
+      // Overwrite membershipType to 99
+      const oldHex64 = found.ownerPackedValueHex64;
+      const newHex64 = overwriteMembershipTypeByte(oldHex64, 99);
 
-        await core.connect(owner).createGroup("G", "D", 0); // Manual
-        const groupId = await core.nextGroupId();
+      await setSlot(coreAddr, found.ownerPackedSlot, "0x" + newHex64);
 
-        // Wrong expected type: asking for NFT while actual is Manual
-        await expect(core["isMember(uint256,address,uint8)"](groupId, A.address, 1))
-          .to.be.revertedWithCustomError(core, "MembershipTypeMismatch")
-          .withArgs(0, 1);
+      await expect(core.isMember(groupId, A.address))
+        .to.be.revertedWithPanic(0x21);
+    });
 
-        // Correct expected type
-        expect(await core["isMember(uint256,address,uint8)"](groupId, A.address, 0)).to.equal(false);
-      });
+    // From Membership.extra2.ts
+    it("ClaimCode: isMember is false before claim, true after claim (covers ClaimCode isMember path)", async () => {
+      const { core, owner, A, B } = await deployCore();
 
-      it("isMember: covers UnsupportedMembershipType by storage poke (enum out of range)", async () => {
-        const { core, owner, A } = await deployCore();
+      //  Create group with MembershipType.ClaimCode (assumed enum order: 0 Manual, 1 NFT, 2 ClaimCode)
+      //  إنشاء مجموعة بنوع عضوية ClaimCode (نفترض 2)
+      await (await core.connect(owner).createGroup("G-CC", "D", 2)).wait();
+      const groupId = await core.nextGroupId();
 
-        await core.connect(owner).createGroup("G", "D", 0); // create valid group first
-        const groupId = await core.nextGroupId();
+      const codeHashValue = id("SIMPLE_CODE_1"); // bytes32
 
-        const coreAddr = await core.getAddress();
+      //  Create claim code as owner
+      //  إنشاء كود انضمام بواسطة مالك المجموعة
+      await (await core.connect(owner).createClaimCode(groupId, codeHashValue)).wait();
 
-        // Find packed slot that contains owner + membershipType
-        const found = await findGroupsMappingSlotIndex({
-          coreAddr,
-          groupId: BigInt(groupId),
-          ownerAddr: owner.address,
-          maxScan: 250,
-        });
+      //  Before claim: nobody is a member (except possibly owner depending on your design)
+      //  قبل الـ claim: المفروض المستخدمين ليسوا أعضاء
+      expect(await core.isMember(groupId, A.address)).to.equal(false);
+      expect(await core.isMember(groupId, B.address)).to.equal(false);
 
-        // Overwrite membershipType to 99
-        const oldHex64 = found.ownerPackedValueHex64;
-        const newHex64 = overwriteMembershipTypeByte(oldHex64, 99);
+      //  A claims with code
+      //  A يعمل claim بالكود
+      await (await core.connect(A).claimWithCode(groupId, codeHashValue)).wait();
 
-        await setSlot(coreAddr, found.ownerPackedSlot, "0x" + newHex64);
+      //  After claim: A is member, B is not
+      //  بعد claim: A عضو و B ليس عضو
+      expect(await core.isMember(groupId, A.address)).to.equal(true);
+      expect(await core.isMember(groupId, B.address)).to.equal(false);
+    });
 
-        await expect(core.isMember(groupId, A.address))
-          .to.be.revertedWithPanic(0x21);
-      });
+    // From Membership.extra3.ts
+    it("NFT isMember: covers nft==0, not-registered, balance==0, and success branches", async () => {
+      const { core, owner, A } = await deployCore();
+
+      // EN: Create group with NFT membership type (assumed enum order: 0 Manual, 1 NFT, 2 ClaimCode).
+      // AR: إنشاء مجموعة بنوع NFT (نفترض 1).
+      await (await core.connect(owner).createGroup("G-NFT", "D", 1)).wait();
+      const groupId = await core.nextGroupId();
+
+      // EN: nft not set => isMember must be false (hits nft==0 branch).
+      // AR: بدون تحديد NFT => false.
+      expect(await core.isMember(groupId, A.address)).to.equal(false);
+
+      // EN: Set NFT contract to a controllable balance mock.
+      // AR: نحدد NFT موك بسيط.
+      const MockERC721Balance = await ethers.getContractFactory("MockERC721Balance");
+      const nft = (await MockERC721Balance.deploy()) as any;
+
+      await (await core.connect(owner).setGroupNft(groupId, await nft.getAddress())).wait();
+
+      // EN: balance > 0 but not registered => false (hits !nftRegistered branch).
+      // AR: رصيد موجود لكن غير مسجل => false.
+      await (await nft.setBalance(A.address, 1)).wait();
+      expect(await core.isMember(groupId, A.address)).to.equal(false);
+
+      // EN: registerWithNft requires balance > 0 and sets nftRegistered => true.
+      // AR: التسجيل يفعّل nftRegistered.
+      await (await core.connect(A).registerWithNft(groupId)).wait();
+      expect(await core.isMember(groupId, A.address)).to.equal(true);
+
+      // EN: Keep registered but set balance to 0 => false (hits balanceOf(user) > 0 == false branch).
+      // AR: يبقى مسجل لكن الرصيد 0 => false.
+      await (await nft.setBalance(A.address, 0)).wait();
+      expect(await core.isMember(groupId, A.address)).to.equal(false);
+    });
+
+    // From Membership.extra3.ts
+    it("reaches revert UnsupportedMembershipType (covers lines 154-155)", async () => {
+      const [owner, A] = await ethers.getSigners();
+
+      const Harness = await ethers.getContractFactory("MembershipTypeHarness");
+      const h = (await Harness.deploy()) as any;
+
+      const groupId = 1;
+      await h.setGroup(groupId, true, owner.address, 9); // 9 = out of range for your handled modes
+
+      // Solidity throws panic 0x21 when converting invalid enum value before reaching UnsupportedMembershipType check
+      await expect(h.isMember(groupId, A.address)).to.be.revertedWithPanic(0x21);
+    });
   });
 
   describe("Manual", function () {
@@ -209,6 +289,17 @@ describe("Membership (Hardhat)", function () {
       await expect(core.connect(owner).setManualMember(groupId, A.address, true))
         .to.be.revertedWithCustomError(core, "UnsupportedMembershipType")
         .withArgs(1);
+    });
+
+    // From Membership.extra3.ts
+    it("onlyGroupOwner: missing group hits GroupDoesNotExist (covers modifier missing-group branch)", async () => {
+      const { core, owner, A } = await deployCore();
+
+      // EN: setManualMember is onlyGroupOwner; missing group should revert GroupDoesNotExist.
+      // AR: دالة setManualMember عليها onlyGroupOwner; مع group غير موجود لازم ترجع GroupDoesNotExist.
+      await expect(core.connect(owner).setManualMember(999, A.address, true))
+        .to.be.revertedWithCustomError(core, "GroupDoesNotExist")
+        .withArgs(999);
     });
   });
 
@@ -414,3 +505,4 @@ describe("Membership (Hardhat)", function () {
     });
   });
 });
+

@@ -145,7 +145,7 @@ All contracts are within EVM limits:
 ### Test Coverage
 
 - **Production Code Coverage:** See [TESTING_REPORT.md](./TESTING_REPORT.md)
-- **Total Tests:** 127 tests, all passing
+- **Total Tests:** 121 tests, all passing
 - **Test Methodology:** Unit tests + integration tests
 
 ---
