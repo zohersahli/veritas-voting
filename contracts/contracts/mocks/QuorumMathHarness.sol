@@ -4,8 +4,7 @@ pragma solidity ^0.8.30;
 import { QuorumMath } from "../libraries/QuorumMath.sol";
 
 /// @title QuorumMathHarness
-/// EN: Exposes QuorumMath internal functions for testing.
-/// AR: عقد مساعد لكشف دوال QuorumMath الداخلية لأغراض الاختبار فقط.
+/// Exposes QuorumMath internal functions for testing.
 contract QuorumMathHarness {
     function validate(uint16 bps) external pure {
         QuorumMath.validateBps(bps);

@@ -4,7 +4,6 @@ pragma solidity ^0.8.30;
 
 /// @title Delegation (L2)
 /// @notice Poll-level delegation: each delegator can delegate to one delegate per poll.
-/// AR: التفويض على مستوى Poll. كل شخص يفوض لشخص واحد فقط لكل Poll.
 abstract contract Delegation {
     // -----------------------------
     // Errors

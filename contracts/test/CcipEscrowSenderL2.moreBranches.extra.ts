@@ -22,8 +22,7 @@ describe("CcipEscrowSenderL2 more branches (Hardhat)", function () {
     const link = await MockLink.deploy();
 
     const MockCcipRouter = await ethers.getContractFactory("MockCcipRouter");
-    // EN: Small fee to keep tests deterministic
-    // AR: Fee صغير حتى يبقى الاختبار ثابت
+    // Small fee to keep tests deterministic
     const router = await MockCcipRouter.deploy(1111n, parseEther("0.001"));
 
     const VeritasCore = await ethers.getContractFactory("VeritasCore");
@@ -73,8 +72,7 @@ describe("CcipEscrowSenderL2 more branches (Hardhat)", function () {
 
     const { startTime, endTime } = await getFutureWindow();
 
-    // EN: Enable quorum so 0 votes becomes FailedQuorum
-    // AR: تفعيل النصاب حتى 0 أصوات يصير FailedQuorum
+    // Enable quorum so 0 votes becomes FailedQuorum
     await (await core.connect(owner).createPollWithLinkEscrow(
       groupId,
       "P",
@@ -116,8 +114,7 @@ describe("CcipEscrowSenderL2 more branches (Hardhat)", function () {
   it("ccipReceive: wrong ack sender reverts, correct ack sender succeeds and sets ackReceived", async () => {
     const { core, router, owner } = await deployCore();
 
-    // EN: Configure ACK allowlist
-    // AR: إعداد السماح للـ ACK
+    // Configure ACK allowlist
     const ackSourceSelector = 9999n;
     const ackSender = owner.address;
     await (await core.connect(owner).setAckConfig(ackSourceSelector, ackSender)).wait();
@@ -144,8 +141,7 @@ describe("CcipEscrowSenderL2 more branches (Hardhat)", function () {
       };
     };
 
-    // EN: Impersonate router so msg.sender == ccipRouter
-    // AR: انتحال عنوان الراوتر حتى msg.sender يكون الراوتر
+    // Impersonate router so msg.sender == ccipRouter
     const routerAddr = await router.getAddress();
     await ethers.provider.send("hardhat_setBalance", [routerAddr, "0x1000000000000000000"]);
     await ethers.provider.send("hardhat_impersonateAccount", [routerAddr]);
@@ -174,8 +170,7 @@ describe("CcipEscrowSenderL2 more branches (Hardhat)", function () {
   it("claimPlatformFee: reservedPlatform == 0 should revert BadConfig (pf==0 branch)", async () => {
     const { core, link, router, owner, A } = await deployCore();
 
-    // EN: Make platform fee zero so reservedPlatform becomes 0
-    // AR: نجعل رسوم المنصة 0 حتى reservedPlatform تصير 0
+    // Make platform fee zero so reservedPlatform becomes 0
     await (await core.connect(owner).setPlatformFeeBps(0)).wait();
 
     const groupId = await createManualGroup(core, owner, [A.address]);

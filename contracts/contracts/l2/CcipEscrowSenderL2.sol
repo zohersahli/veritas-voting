@@ -2,13 +2,6 @@
 pragma solidity ^0.8.30;
 
 /*
-Escrow لكل Poll على L2 بالـ LINK:
-- يقفل مبلغ لتغطية CCIP fee (مع هامش)
-- يقفل منصة 7% (لا تخرج إلا عند الإرسال وحسب الحالة)
-- يسمح بالإرسال permissionless بعد finalize
-- يسمح بالـ top-up permissionless
-- يسمح بسحب المتبقي لمنشئ التصويت بعد الإرسال
-
 Per-poll LINK escrow on L2:
 - locks a budget for CCIP fees (with a margin)
 - locks a 7% platform fee (released based on final status at send-time)
@@ -140,7 +133,6 @@ abstract contract CcipEscrowSenderL2 is Polls, FinalizationL2, Ownable, Pausable
     // Constructor
     // -----------------------------
     /*
-    يجهز إعدادات CCIP الأساسية على L2.
     Sets the base CCIP configuration on L2.
     */
     constructor(
@@ -280,7 +272,7 @@ abstract contract CcipEscrowSenderL2 is Polls, FinalizationL2, Ownable, Pausable
     // -----------------------------
     /*
     Allows anyone to top up the poll escrow.
-    ملاحظة: ليست Pausable حسب قرارنا, لكن عليها nonReentrant لأنها تحويل.
+    Note: Not Pausable per our decision, but has nonReentrant because it's a transfer.
     */
     function topUpLink(uint256 pollId, uint256 amount) external nonReentrant {
         Escrow storage e = escrows[pollId];

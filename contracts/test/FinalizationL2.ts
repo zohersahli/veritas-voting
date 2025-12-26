@@ -65,8 +65,7 @@ describe("FinalizationL2 (Hardhat)", function () {
   }) {
     const { core, link, owner, A, B, C } = await deployCore();
 
-    // AR: إنشاء مجموعة Manual وإضافة A,B,C كأعضاء
-    // EN: Create Manual group and add A,B,C as members
+    // Create Manual group and add A,B,C as members
     await (await core.connect(owner).createGroup("G", "D", 0)).wait();
     const groupId = await core.nextGroupId();
 
@@ -74,8 +73,7 @@ describe("FinalizationL2 (Hardhat)", function () {
     await (await core.connect(owner).setManualMember(groupId, B.address, true)).wait();
     await (await core.connect(owner).setManualMember(groupId, C.address, true)).wait();
 
-    // AR: تمويل LINK للـ owner حتى createPollWithLinkEscrow يقدر يعمل transferFrom
-    // EN: Fund LINK to owner so createPollWithLinkEscrow can transferFrom
+    // Fund LINK to owner so createPollWithLinkEscrow can transferFrom
     const linkAmount = parseEther("10");
     await (await link.connect(owner).mint(owner.address, linkAmount)).wait();
     await (await link.connect(owner).approve(await core.getAddress(), linkAmount)).wait();
@@ -109,8 +107,7 @@ describe("FinalizationL2 (Hardhat)", function () {
   it("Cannot finalize before endTime", async () => {
     const { core, owner, pollId, startTime } = await setupGroupAndPoll();
 
-    // AR: ندخل داخل نافذة التصويت لكن قبل النهاية
-    // EN: Move into voting window but before end
+    // Move into voting window but before end
     await setTime(startTime + 1);
 
     await expect(core.connect(owner).finalizePollOnL2(pollId))
@@ -120,15 +117,13 @@ describe("FinalizationL2 (Hardhat)", function () {
   it("Finalizes after endTime and computes winner correctly", async () => {
     const { core, owner, pollId, endTime, A, B, C } = await setupGroupAndPoll();
 
-    // AR: ندخل نافذة التصويت ونصوت
-    // EN: Enter voting window and vote
+    // Enter voting window and vote
     await setTime(endTime - 500);
     await (await core.connect(A).vote(pollId, 0n)).wait(); // YES
     await (await core.connect(B).vote(pollId, 0n)).wait(); // YES
     await (await core.connect(C).vote(pollId, 1n)).wait(); // NO
 
-    // AR: ننتظر حتى endTime وننهي
-    // EN: Wait until endTime and finalize
+    // Wait until endTime and finalize
     await setTime(endTime + 1);
 
     await expect(core.connect(owner).finalizePollOnL2(pollId))
@@ -148,10 +143,8 @@ describe("FinalizationL2 (Hardhat)", function () {
       quorumPercentage: 5000, // 50%
     });
 
-    // AR: eligibleCount = 4 (owner + A + B + C), required = ceil(4 * 5000 / 10000) = 2
-    // EN: eligibleCount = 4, required = ceil(4 * 5000 / 10000) = 2
-    // AR: نصوت صوت واحد فقط (أقل من المطلوب)
-    // EN: Vote only once (less than required)
+    // eligibleCount = 4 (owner + A + B + C), required = ceil(4 * 5000 / 10000) = 2
+    // Vote only once (less than required)
     await setTime(endTime - 500);
     await (await core.connect(A).vote(pollId, 0n)).wait();
 
@@ -171,10 +164,8 @@ describe("FinalizationL2 (Hardhat)", function () {
       quorumPercentage: 5000, // 50%
     });
 
-    // AR: required = ceil(4 * 5000 / 10000) = 2
-    // EN: required = ceil(4 * 5000 / 10000) = 2
-    // AR: نصوت صوتين (يساوي المطلوب)
-    // EN: Vote twice (equals required)
+    // required = ceil(4 * 5000 / 10000) = 2
+    // Vote twice (equals required)
     await setTime(endTime - 500);
     await (await core.connect(A).vote(pollId, 0n)).wait();
     await (await core.connect(B).vote(pollId, 0n)).wait();

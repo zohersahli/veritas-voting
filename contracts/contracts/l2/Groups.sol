@@ -4,8 +4,7 @@ pragma solidity ^0.8.30;
 /// @title Groups (L2)
 /// @notice Stores groups and their immutable membership type.
 /// @dev No membership logic here. Only group metadata + membershipType lock.
-/// EN: Membership type is locked at creation.
-/// AR: نوع العضوية ثابت عند الإنشاء.
+/// Membership type is locked at creation.
 abstract contract Groups {
     // -----------------------------
     // Errors

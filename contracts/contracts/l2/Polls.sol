@@ -2,8 +2,7 @@
 pragma solidity ^0.8.30;
 
 /*
-EN: Stores poll metadata on L2: title, IPFS CID, options, timing, and quorum configuration.
-AR: إدارة بيانات التصويتات على L2: العنوان, CID على IPFS, الخيارات, التوقيت, وإعدادات النصاب.
+Stores poll metadata on L2: title, IPFS CID, options, timing, and quorum configuration.
 
 Notes:
 - Polls are created internally only via _createPoll so higher-level modules control escrow/fees.
@@ -49,8 +48,7 @@ abstract contract Polls {
         QuorumConfig quorum;
 
         /// @notice Snapshot of eligible voters count at creation time (must include owner).
-        /// EN: Snapshot of eligible voter count at poll creation.
-        /// AR: Snapshot لعدد المؤهلين للتصويت وقت الإنشاء.
+        /// Snapshot of eligible voter count at poll creation.
         uint256 eligibleCountSnapshot;
 
         uint64 createdAt;
@@ -84,8 +82,7 @@ abstract contract Polls {
     // Hook (implemented by VeritasCore)
     // -----------------------------
     /// @dev Returns eligible voter count for poll snapshot (must include owner).
-    /// EN: Used only at creation time to store eligibleCountSnapshot.
-    /// AR: يستخدم عند إنشاء التصويت لتخزين eligibleCountSnapshot.
+    /// Used only at creation time to store eligibleCountSnapshot.
     function _eligibleCountForPollSnapshot(uint256 groupId) internal view virtual returns (uint256);
 
     // -----------------------------

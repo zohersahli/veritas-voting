@@ -3,8 +3,7 @@ import { saveDeployment } from "./utils/saveDeployment.js";
 import fs from "node:fs";
 
 /*
-AR: Deploy L2 VeritasCore (Sender + modules).
-EN: Deploy L2 VeritasCore (Sender + modules).
+Deploy L2 VeritasCore (Sender + modules).
 
 Localhost:
 - Read deployments/localhost.json to reuse L1 MockCcipRouter
@@ -50,8 +49,7 @@ async function main() {
     networkName === "localhost" ||
     chainId === 31337n;
 
-  // AR: Safety switch للتست نت فقط
-  // EN: Safety switch for testnet only
+  // Safety switch for testnet only
   const confirm = (process.env.CONFIRM_TESTNET_DEPLOY ?? "").trim();
   if (!isLocal && confirm !== "YES") {
     throw new Error(

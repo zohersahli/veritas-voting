@@ -12,8 +12,7 @@ import { Ownable } from "@openzeppelin/contracts/access/Ownable.sol";
 
 /// @title VeritasCore (L2)
 /// @notice Main orchestrator on L2: Groups, Membership, Polls, Voting, Delegation, Finalization, CCIP escrow sender.
-/// EN: Main L2 contract wiring all modules.
-/// AR: العقد الرئيسي على L2 الذي يجمع كل الموديولات.
+/// Main L2 contract wiring all modules.
 contract VeritasCore is
     Groups,
     Membership,
@@ -97,8 +96,7 @@ contract VeritasCore is
     }
 
     /// @dev Real quorum: return the snapshot stored in Polls at creation time.
-    /// EN: supported=true because snapshot exists on-chain.
-    /// AR: supported=true لأن snapshot موجود على السلسلة.
+    /// supported=true because snapshot exists on-chain.
     function _eligibleCountForQuorum(uint256 pollId)
         internal
         view

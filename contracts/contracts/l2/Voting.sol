@@ -5,8 +5,7 @@ import { SharedErrors } from "./SharedErrors.sol";
 
 /// @title Voting (L2)
 /// @notice Cast votes with full checks: poll exists, timing, option bounds, membership, and delegation.
-/// EN: Voting with delegation support (weighted votes).
-/// AR: التصويت مع دعم التفويض (تصويت بوزن).
+/// Voting with delegation support (weighted votes).
 abstract contract Voting {
     // -----------------------------
     // Errors

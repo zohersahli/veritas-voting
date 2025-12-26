@@ -7,8 +7,7 @@ import { IERC721 } from "@openzeppelin/contracts/token/ERC721/IERC721.sol";
 /// @title Membership (L2)
 /// @notice Membership checks and management for groups: Manual, NFT, ClaimCode.
 /// @dev Uses hooks so VeritasCore wires Groups storage without tight coupling.
-/// EN: Membership management for groups: Manual, NFT (register + hold), ClaimCode.
-/// AR: إدارة العضوية للمجموعات: Manual, NFT (تسجيل + امتلاك), ClaimCode.
+/// Membership management for groups: Manual, NFT (register + hold), ClaimCode.
 abstract contract Membership {
     // -----------------------------
     // Errors
@@ -38,24 +37,20 @@ abstract contract Membership {
     // Storage
     // -----------------------------
     /// @notice Manual membership: groupId -> user -> isMember
-    /// EN: Manual membership controlled by group owner.
-    /// AR: عضوية يدوية يتحكم بها مالك المجموعة.
+    /// Manual membership controlled by group owner.
     mapping(uint256 => mapping(address => bool)) public manualMembers;
 
     /// @notice NFT membership: groupId -> NFT contract address
-    /// EN: NFT contract used for membership in this group (NFT mode only).
-    /// AR: عقد NFT المستخدم للعضوية في هذه المجموعة (فقط وضع NFT).
+    /// NFT contract used for membership in this group (NFT mode only).
     mapping(uint256 => address) public groupNft;
 
     /// @notice NFT registration: groupId -> user -> registered
     /// @dev In NFT mode, membership requires (registered == true) AND (balanceOf(user) > 0)
-    /// EN: Register inside group + still hold the NFT at vote time.
-    /// AR: تسجيل داخل المجموعة + يجب أن يملك NFT وقت التصويت.
+    /// Register inside group + still hold the NFT at vote time.
     mapping(uint256 => mapping(address => bool)) public nftRegistered;
 
     /// @notice Claim codes: codeHash -> groupId (0 means not created)
-    /// EN: Bind codeHash to a group to prevent cross-group usage.
-    /// AR: ربط codeHash بالمجموعة لمنع استخدامه في مجموعة أخرى.
+    /// Bind codeHash to a group to prevent cross-group usage.
     mapping(bytes32 => uint256) public claimCodeGroup;
 
     /// @notice Claim codes: used flag
@@ -65,8 +60,7 @@ abstract contract Membership {
     mapping(bytes32 => address) public claimCodeOwner;
 
     /// @notice Group member count excluding owner
-    /// EN: We exclude owner from stored count, and add +1 in eligibleCount.
-    /// AR: العداد لا يشمل المالك, ونضيف +1 في eligibleCount.
+    /// We exclude owner from stored count, and add +1 in eligibleCount.
     mapping(uint256 => uint256) internal _groupMemberCount;
 
     // -----------------------------
@@ -107,15 +101,13 @@ abstract contract Membership {
     // Public views (counts)
     // -----------------------------
     /// @notice Returns current stored member count excluding owner.
-    /// EN: Raw stored count (owner excluded).
-    /// AR: يرجع العداد المخزن (بدون المالك).
+    /// Raw stored count (owner excluded).
     function getGroupMemberCount(uint256 groupId) public view onlyExistingGroup(groupId) returns (uint256) {
         return _groupMemberCount[groupId];
     }
 
     /// @notice Returns eligible count including owner (recommended for quorum snapshots).
-    /// EN: eligible = stored count + 1 (owner).
-    /// AR: eligibleCount = عدد الأعضاء + 1 (المالك).
+    /// eligible = stored count + 1 (owner).
     function getEligibleCountForQuorum(uint256 groupId) public view onlyExistingGroup(groupId) returns (uint256) {
         return _groupMemberCount[groupId] + 1;
     }
@@ -124,8 +116,7 @@ abstract contract Membership {
     // Membership checks
     // -----------------------------
     /// @notice Returns true if user is a member according to the group's membership type.
-    /// EN: Owner is always a member.
-    /// AR: المالك عضو دائما.
+    /// Owner is always a member.
     function isMember(uint256 groupId, address user) public view onlyExistingGroup(groupId) returns (bool) {
         address owner = _groupOwner(groupId);
         if (user == owner) return true;
@@ -140,15 +131,13 @@ abstract contract Membership {
             address nft = groupNft[groupId];
             if (nft == address(0)) return false;
 
-            // EN: Must be registered AND still hold NFT at check time (vote time).
-            // AR: لازم يكون مسجل ولازم يملك NFT وقت التحقق.
+            // Must be registered AND still hold NFT at check time (vote time).
             if (!nftRegistered[groupId][user]) return false;
             return IERC721(nft).balanceOf(user) > 0;
         }
 
         if (t == Groups.MembershipType.ClaimCode) {
-            // EN: In ClaimCode mode, claimed members are stored in manualMembers.
-            // AR: في ClaimCode يتم تخزين العضوية داخل manualMembers بعد claim.
+            // In ClaimCode mode, claimed members are stored in manualMembers.
             return manualMembers[groupId][user];
         }
 
@@ -170,8 +159,7 @@ abstract contract Membership {
     // Manual membership (Manual + ClaimCode)
     // -----------------------------
     /// @notice Add or remove a member manually.
-    /// EN: Allowed in Manual and ClaimCode, not allowed in NFT mode.
-    /// AR: مسموح في Manual و ClaimCode, غير مسموح في NFT.
+    /// Allowed in Manual and ClaimCode, not allowed in NFT mode.
     function setManualMember(uint256 groupId, address member, bool isMember_)
         external
         onlyGroupOwner(groupId)
@@ -224,8 +212,7 @@ abstract contract Membership {
     }
 
     /// @notice Register as a member in an NFT group.
-    /// EN: Must hold NFT at registration, and still must hold NFT at voting via isMember.
-    /// AR: لازم يملك NFT وقت التسجيل, ولازم يظل يملكه وقت التصويت.
+    /// Must hold NFT at registration, and still must hold NFT at voting via isMember.
     function registerWithNft(uint256 groupId) external onlyExistingGroup(groupId) {
         Groups.MembershipType t = _groupMembershipType(groupId);
         if (t != Groups.MembershipType.NFT) {
@@ -252,8 +239,7 @@ abstract contract Membership {
     }
 
     /// @notice Unregister from an NFT group.
-    /// EN: Optional cleanup, does not require NFT ownership.
-    /// AR: إلغاء تسجيل اختياري, لا يتطلب امتلاك NFT.
+    /// Optional cleanup, does not require NFT ownership.
     function unregisterFromNft(uint256 groupId) external onlyExistingGroup(groupId) {
         Groups.MembershipType t = _groupMembershipType(groupId);
         if (t != Groups.MembershipType.NFT) {

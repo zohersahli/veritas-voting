@@ -3,8 +3,7 @@ pragma solidity ^0.8.30;
 
 /// @title FinalizationL2
 /// @notice Finalizes polls on L2 by computing total votes and winner, then determines final status.
-/// EN: Computes result (winner + totals) and stores an immutable finalized record on L2.
-/// AR: يحسب النتيجة (الفائز + مجموع الأصوات) ثم يحدد الحالة النهائية ويخزنها نهائيا على L2.
+/// Computes result (winner + totals) and stores an immutable finalized record on L2.
 abstract contract FinalizationL2 {
     // -----------------------------
     // Errors (prefixed to avoid clashes)
@@ -15,8 +14,7 @@ abstract contract FinalizationL2 {
     error FinalizationInvalidFinalStatus(uint256 pollId);
     error FinalizationZeroOptions(uint256 pollId);
 
-    // EN: Defensive error in case of unrealistic overflow in quorum math.
-    // AR: خطأ دفاعي في حالة overflow غير واقعية في حساب النصاب.
+    // Defensive error in case of unrealistic overflow in quorum math.
     error FinalizationQuorumOverflow(uint256 pollId);
 
     // -----------------------------
@@ -60,17 +58,15 @@ abstract contract FinalizationL2 {
     function _voteCount(uint256 pollId, uint256 optionIndex) internal view virtual returns (uint256);
 
     /// @dev Local-testing hook to force status.
-    /// EN: If returns Passed or FailedQuorum, it overrides computed status (tests only).
-    /// EN: If returns Unknown, status is computed from votes + quorum logic.
-    /// AR: Hook للاختبار. إذا Unknown نحسب النتيجة فعليا.
+    /// If returns Passed or FailedQuorum, it overrides computed status (tests only).
+    /// If returns Unknown, status is computed from votes + quorum logic.
     function _finalStatusForFinalize(uint256 pollId) internal view virtual returns (ResultStatus);
 
     // -----------------------------
     // Optional quorum hook (real quorum uses snapshot from Polls)
     // -----------------------------
     /// @dev Return eligible voter count for quorum math (by pollId).
-    /// EN: VeritasCore should override and return Poll.eligibleCountSnapshot.
-    /// AR: VeritasCore يعمل override ويرجع eligibleCountSnapshot.
+    /// VeritasCore should override and return Poll.eligibleCountSnapshot.
     function _eligibleCountForQuorum(uint256)
         internal
         view
@@ -118,8 +114,7 @@ abstract contract FinalizationL2 {
             uint256 c = _voteCount(pollId, i);
             totalVotes += c;
 
-            // EN: tie-break is deterministic: only update on strictly greater
-            // AR: كسر التعادل ثابت: التحديث فقط عند أكبر
+            // tie-break is deterministic: only update on strictly greater
             if (c > winningVotes) {
                 winningVotes = c;
                 winningOption = i;
@@ -134,16 +129,14 @@ abstract contract FinalizationL2 {
         // 4) Compute status from votes + quorum
         ResultStatus computed;
 
-        // EN: baseline: no participation => FailedQuorum
-        // AR: قاعدة أساسية: 0 أصوات => FailedQuorum
+        // baseline: no participation => FailedQuorum
         if (totalVotes == 0) {
             computed = ResultStatus.FailedQuorum;
         } else {
             computed = ResultStatus.Passed;
         }
 
-        // EN: if quorum enabled and eligibleCount is available, apply real quorum math
-        // AR: إذا النصاب مفعل و eligibleCount متوفر نطبق النصاب الحقيقي
+        // if quorum enabled and eligibleCount is available, apply real quorum math
         if (qEnabled) {
             (bool supported, uint256 eligibleCount) = _eligibleCountForQuorum(pollId);
 
@@ -172,8 +165,7 @@ abstract contract FinalizationL2 {
         } else {
             st = forced;
 
-            // EN: safety: never allow Passed with 0 votes
-            // AR: أمان: لا نسمح Passed مع 0 أصوات
+            // safety: never allow Passed with 0 votes
             if (st == ResultStatus.Passed && totalVotes == 0) {
                 st = ResultStatus.FailedQuorum;
             }

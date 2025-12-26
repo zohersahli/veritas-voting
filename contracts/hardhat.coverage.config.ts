@@ -10,17 +10,15 @@ dotenv.config();
 // -----------------------------------------------------------------------------
 // Coverage-specific configuration
 //  This config uses Solidity 0.8.30 for coverage compatibility.
-//  هذا الإعداد يستخدم Solidity 0.8.30 لتوافق coverage.
 // -----------------------------------------------------------------------------
 // NOTE: Use this config only for coverage: npx hardhat coverage --config hardhat.coverage.config.ts
 //  Coverage tool currently doesn't support Solidity 0.8.31, so we use 0.8.30 here.
-//  أداة coverage لا تدعم Solidity 0.8.31 حالياً، لذا نستخدم 0.8.30 هنا.
 // -----------------------------------------------------------------------------
 
 const config: HardhatUserConfig = {
   plugins: [hardhatEthers, hardhatIgnition, hardhatToolboxMochaEthers],
   solidity: {
-    version: "0.8.30", // Coverage-compatible version — نسخة متوافقة مع coverage
+    version: "0.8.30", // Coverage-compatible version
     settings: {
       optimizer: {
         enabled: true,

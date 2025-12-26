@@ -55,8 +55,7 @@ describe("Membership (Hardhat)", function () {
       return h.toLowerCase().padStart(64, "0");
     }
 
-    // EN: Find the mapping slot index for `groups` by detecting the slot that contains owner address.
-    // AR: إيجاد رقم slot الخاص بـ mapping groups عبر مطابقة owner داخل التخزين.
+    // Find the mapping slot index for `groups` by detecting the slot that contains owner address.
     async function findGroupsMappingSlotIndex(params: {
       coreAddr: string;
       groupId: bigint;
@@ -79,8 +78,7 @@ describe("Membership (Hardhat)", function () {
       throw new Error("Could not locate groups mapping slot index (scan failed)");
     }
 
-    // EN: Change the 1-byte enum right before the last 20 bytes (address) in the packed slot.
-    // AR: تعديل بايت واحد (membershipType) الموجود قبل العنوان مباشرة داخل slot المعبأ.
+    // Change the 1-byte enum right before the last 20 bytes (address) in the packed slot.
     function overwriteMembershipTypeByte(packedHex64: string, newType: number) {
       const hex = packedHex64; // 64 chars, no 0x
       const typeHex = newType.toString(16).padStart(2, "0");
@@ -142,28 +140,23 @@ describe("Membership (Hardhat)", function () {
     it("ClaimCode: isMember is false before claim, true after claim (covers ClaimCode isMember path)", async () => {
       const { core, owner, A, B } = await deployCore();
 
-      //  Create group with MembershipType.ClaimCode (assumed enum order: 0 Manual, 1 NFT, 2 ClaimCode)
-      //  إنشاء مجموعة بنوع عضوية ClaimCode (نفترض 2)
+      // Create group with MembershipType.ClaimCode (assumed enum order: 0 Manual, 1 NFT, 2 ClaimCode)
       await (await core.connect(owner).createGroup("G-CC", "D", 2)).wait();
       const groupId = await core.nextGroupId();
 
       const codeHashValue = id("SIMPLE_CODE_1"); // bytes32
 
-      //  Create claim code as owner
-      //  إنشاء كود انضمام بواسطة مالك المجموعة
+      // Create claim code as owner
       await (await core.connect(owner).createClaimCode(groupId, codeHashValue)).wait();
 
-      //  Before claim: nobody is a member (except possibly owner depending on your design)
-      //  قبل الـ claim: المفروض المستخدمين ليسوا أعضاء
+      // Before claim: nobody is a member (except possibly owner depending on your design)
       expect(await core.isMember(groupId, A.address)).to.equal(false);
       expect(await core.isMember(groupId, B.address)).to.equal(false);
 
-      //  A claims with code
-      //  A يعمل claim بالكود
+      // A claims with code
       await (await core.connect(A).claimWithCode(groupId, codeHashValue)).wait();
 
-      //  After claim: A is member, B is not
-      //  بعد claim: A عضو و B ليس عضو
+      // After claim: A is member, B is not
       expect(await core.isMember(groupId, A.address)).to.equal(true);
       expect(await core.isMember(groupId, B.address)).to.equal(false);
     });
@@ -172,34 +165,28 @@ describe("Membership (Hardhat)", function () {
     it("NFT isMember: covers nft==0, not-registered, balance==0, and success branches", async () => {
       const { core, owner, A } = await deployCore();
 
-      // EN: Create group with NFT membership type (assumed enum order: 0 Manual, 1 NFT, 2 ClaimCode).
-      // AR: إنشاء مجموعة بنوع NFT (نفترض 1).
+      // Create group with NFT membership type (assumed enum order: 0 Manual, 1 NFT, 2 ClaimCode).
       await (await core.connect(owner).createGroup("G-NFT", "D", 1)).wait();
       const groupId = await core.nextGroupId();
 
-      // EN: nft not set => isMember must be false (hits nft==0 branch).
-      // AR: بدون تحديد NFT => false.
+      // nft not set => isMember must be false (hits nft==0 branch).
       expect(await core.isMember(groupId, A.address)).to.equal(false);
 
-      // EN: Set NFT contract to a controllable balance mock.
-      // AR: نحدد NFT موك بسيط.
+      // Set NFT contract to a controllable balance mock.
       const MockERC721Balance = await ethers.getContractFactory("MockERC721Balance");
       const nft = (await MockERC721Balance.deploy()) as any;
 
       await (await core.connect(owner).setGroupNft(groupId, await nft.getAddress())).wait();
 
-      // EN: balance > 0 but not registered => false (hits !nftRegistered branch).
-      // AR: رصيد موجود لكن غير مسجل => false.
+      // balance > 0 but not registered => false (hits !nftRegistered branch).
       await (await nft.setBalance(A.address, 1)).wait();
       expect(await core.isMember(groupId, A.address)).to.equal(false);
 
-      // EN: registerWithNft requires balance > 0 and sets nftRegistered => true.
-      // AR: التسجيل يفعّل nftRegistered.
+      // registerWithNft requires balance > 0 and sets nftRegistered => true.
       await (await core.connect(A).registerWithNft(groupId)).wait();
       expect(await core.isMember(groupId, A.address)).to.equal(true);
 
-      // EN: Keep registered but set balance to 0 => false (hits balanceOf(user) > 0 == false branch).
-      // AR: يبقى مسجل لكن الرصيد 0 => false.
+      // Keep registered but set balance to 0 => false (hits balanceOf(user) > 0 == false branch).
       await (await nft.setBalance(A.address, 0)).wait();
       expect(await core.isMember(groupId, A.address)).to.equal(false);
     });
@@ -295,8 +282,7 @@ describe("Membership (Hardhat)", function () {
     it("onlyGroupOwner: missing group hits GroupDoesNotExist (covers modifier missing-group branch)", async () => {
       const { core, owner, A } = await deployCore();
 
-      // EN: setManualMember is onlyGroupOwner; missing group should revert GroupDoesNotExist.
-      // AR: دالة setManualMember عليها onlyGroupOwner; مع group غير موجود لازم ترجع GroupDoesNotExist.
+      // setManualMember is onlyGroupOwner; missing group should revert GroupDoesNotExist.
       await expect(core.connect(owner).setManualMember(999, A.address, true))
         .to.be.revertedWithCustomError(core, "GroupDoesNotExist")
         .withArgs(999);

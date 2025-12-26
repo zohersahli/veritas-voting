@@ -74,8 +74,7 @@ describe("Voting (Hardhat)", function () {
     const end = now + 200;
     const pollId = await createPoll(core, link, owner, groupId, start, end);
 
-    // EN: set timestamp to start-1 to hit "not started" branch
-    // AR: نضبط الوقت قبل البداية لتغطية فرع "لم يبدأ"
+    // set timestamp to start-1 to hit "not started" branch
     await setTime(start - 1);
 
     await expect(core.connect(A).vote(pollId, 0n))
@@ -95,8 +94,7 @@ describe("Voting (Hardhat)", function () {
     const end = now + 50;
     const pollId = await createPoll(core, link, owner, groupId, start, end);
 
-    // EN: exactly at endTime should revert (nowTs >= endTime)
-    // AR: عند endTime بالضبط لازم يرفض
+    // exactly at endTime should revert (nowTs >= endTime)
     await setTime(end);
 
     await expect(core.connect(A).vote(pollId, 0n))
@@ -204,8 +202,7 @@ describe("Voting (Hardhat)", function () {
 
     await setTime(start + 1);
 
-    // EN: A and C delegate to B, then B votes with weight 3
-    // AR: A و C يفوضون B ثم B يصوت بوزن 3
+    // A and C delegate to B, then B votes with weight 3
     await core.connect(A).delegate(pollId, B.address);
     await core.connect(C).delegate(pollId, B.address);
 

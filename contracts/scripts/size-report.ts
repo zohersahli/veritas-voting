@@ -2,13 +2,11 @@ import { network, artifacts } from "hardhat";
 
 const { ethers } = await network.connect();
 
-// AR: الحدود المسموحة على EVM
-// EN: EVM size limits
+// EVM size limits
 const RUNTIME_LIMIT = 24576; // bytes
 const INITCODE_LIMIT = 49152; // bytes
 
-// AR: قائمة جميع العقود المهمة في المشروع
-// EN: List of all important contracts in the project
+// List of all important contracts in the project
 const CONTRACTS = [
   // L2 Core Contracts
   "VeritasCore",
@@ -31,8 +29,7 @@ const CONTRACTS = [
   "QuorumMath",
 ];
 
-// AR: Constructor arguments للعقود التي تحتاجها
-// EN: Constructor arguments for contracts that need them
+// Constructor arguments for contracts that need them
 function getConstructorArgs(contractName: string): any[] {
   const zeroAddress = "0x0000000000000000000000000000000000000000";
   
@@ -54,8 +51,7 @@ function getConstructorArgs(contractName: string): any[] {
       return [];
     
     default:
-      // AR: العقود abstract لا تحتاج constructor args
-      // EN: Abstract contracts don't need constructor args
+      // Abstract contracts don't need constructor args
       return [];
   }
 }
@@ -98,16 +94,14 @@ async function main() {
 
   for (const name of CONTRACTS) {
     try {
-      // AR: قراءة artifact مباشرة من hardhat
-      // EN: Read artifact directly from hardhat
+      // Read artifact directly from hardhat
       const artifactPath = `contracts/${name}.sol:${name}`;
       let artifact;
       
       try {
         artifact = await artifacts.readArtifact(name);
       } catch {
-        // AR: محاولة قراءة من مسار كامل
-        // EN: Try reading from full path
+        // Try reading from full path
         const paths = [
           `contracts/l2/${name}.sol:${name}`,
           `contracts/l1/${name}.sol:${name}`,
@@ -131,8 +125,7 @@ async function main() {
         }
       }
 
-      // AR: التأكد من وجود artifact
-      // EN: Ensure artifact exists
+      // Ensure artifact exists
       if (!artifact) {
         throw new Error(`Artifact is undefined for ${name}`);
       }
@@ -140,21 +133,17 @@ async function main() {
       const runtime = artifact.deployedBytecode ?? "0x";
       const runtimeBytes = byteLen(runtime);
 
-      // AR: حساب initcode من artifact bytecode أو من factory
-      // EN: Calculate initcode from artifact bytecode or factory
+      // Calculate initcode from artifact bytecode or factory
       let initcodeBytes = 0;
       let isAbstract = false;
       
-      // AR: محاولة استخدام bytecode من artifact أولاً
-      // EN: Try using bytecode from artifact first
+      // Try using bytecode from artifact first
       const artifactBytecode = artifact.bytecode ?? "0x";
       if (artifactBytecode && artifactBytecode !== "0x" && byteLen(artifactBytecode) > runtimeBytes) {
-        // AR: initcode = bytecode (يحتوي على constructor + runtime)
-        // EN: initcode = bytecode (contains constructor + runtime)
+        // initcode = bytecode (contains constructor + runtime)
         initcodeBytes = byteLen(artifactBytecode);
       } else {
-        // AR: محاولة حساب initcode من factory
-        // EN: Try calculating initcode from factory
+        // Try calculating initcode from factory
         try {
           const args = getConstructorArgs(name);
           const factory = await ethers.getContractFactory(name);
@@ -164,8 +153,7 @@ async function main() {
             const initcode = deployTx.data?.toString() ?? "0x";
             initcodeBytes = byteLen(initcode);
           } catch (deployError: any) {
-            // AR: إذا فشل، قد يكون العقد abstract
-            // EN: If it fails, contract might be abstract
+            // If it fails, contract might be abstract
             if (deployError.message?.includes("abstract") || deployError.message?.includes("constructor")) {
               isAbstract = true;
             } else {
@@ -173,13 +161,11 @@ async function main() {
             }
           }
         } catch (e: any) {
-          // AR: العقود abstract لا يمكن نشرها
-          // EN: Abstract contracts cannot be deployed
+          // Abstract contracts cannot be deployed
           if (e.message?.includes("abstract") || e.message?.includes("cannot be instantiated")) {
             isAbstract = true;
           } else {
-            // AR: إذا كان العقد library أو abstract، initcode = 0
-            // EN: If contract is library or abstract, initcode = 0
+            // If contract is library or abstract, initcode = 0
             isAbstract = true;
           }
         }
@@ -195,8 +181,7 @@ async function main() {
         initcodeOk: limits.initcodeOk,
       });
 
-      // AR: طباعة النتائج مع تحذيرات
-      // EN: Print results with warnings
+      // Print results with warnings
       const runtimeStatus = limits.runtimeOk ? "✓" : "✗ EXCEEDS LIMIT";
       const initcodeStatus = limits.initcodeOk ? "✓" : "✗ EXCEEDS LIMIT";
       
@@ -233,8 +218,7 @@ async function main() {
     }
   }
 
-  // AR: جدول ملخص
-  // EN: Summary table
+  // Summary table
   console.log("=".repeat(80));
   console.log("Summary");
   console.log("=".repeat(80));
@@ -261,8 +245,7 @@ async function main() {
     console.log();
   }
 
-  // AR: أكبر العقود
-  // EN: Largest contracts
+  // Largest contracts
   const sortedByRuntime = [...results]
     .filter(r => r.runtimeBytes > 0)
     .sort((a, b) => b.runtimeBytes - a.runtimeBytes);

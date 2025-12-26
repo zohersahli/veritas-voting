@@ -25,8 +25,7 @@ async function readJsonIfExists(filePath: string): Promise<any | null> {
 }
 
 export async function saveDeployment(params: SaveDeploymentParams): Promise<string> {
-  // English: Write deployments to ./deployments/<network>.json
-  // عربي: حفظ عناوين النشر داخل ./deployments/<network>.json
+  // Write deployments to ./deployments/<network>.json
 
   const networkName = (params.network || "unknown").trim() || "unknown";
   const chainIdNum = toChainIdNumber(params.chainId);
@@ -48,8 +47,7 @@ export async function saveDeployment(params: SaveDeploymentParams): Promise<stri
     },
   };
 
-  // English: Atomic-ish write (temp then rename)
-  // عربي: كتابة آمنة نسبيا (ملف مؤقت ثم rename)
+  // Atomic-ish write (temp then rename)
   const tmpPath = `${filePath}.tmp`;
   await fs.writeFile(tmpPath, JSON.stringify(next, null, 2), "utf8");
   await fs.rename(tmpPath, filePath);

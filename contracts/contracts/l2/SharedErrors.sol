@@ -1,36 +1,34 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.30;
 
-/// @title SharedErrors (L2) | أخطاء مشتركة على L2
+/// @title SharedErrors (L2)
 /// @notice Common custom errors shared across L2 modules (skeleton).
-///         أخطاء مخصصة مشتركة بين عقود L2 (سكلتون).
 /// @dev Import this file from other contracts to keep errors consistent.
-///      يتم استيراد هذا الملف لتوحيد الأخطاء وتقليل التكرار.
 library SharedErrors {
     // -----------------------------
-    // Generic | عامة
+    // Generic
     // -----------------------------
     error ZeroAddress();
     error Unauthorized();
 
     // -----------------------------
-    // Groups / Membership | مجموعات / عضوية
+    // Groups / Membership
     // -----------------------------
     error InvalidGroup(uint256 groupId);
     error NotGroupOwner(uint256 groupId);
 
     // -----------------------------
-    // Polls | التصويتات
+    // Polls
     // -----------------------------
     error InvalidPoll(uint256 pollId);
 
     // -----------------------------
-    // Voting | التصويت
+    // Voting
     // -----------------------------
     error AlreadyVoted(uint256 pollId, address voter);
 
     // -----------------------------
-    // Finalization | الإنهاء
+    // Finalization
     // -----------------------------
     error AlreadyFinalized(uint256 pollId);
 }

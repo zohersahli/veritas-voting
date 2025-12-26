@@ -225,12 +225,6 @@ All tests pass successfully. The test suite provides comprehensive coverage of p
 - `test/CcipEscrowSenderL2.moreBranches.extra.ts`
 - `test/CcipEscrowSenderL2.constructor.extra.ts`
 
-**Helper Files:**
-- `test/helpers/deploy.ts`
-- `test/helpers/escrow.ts`
-- `test/helpers/groups.ts`
-- `test/helpers/time.ts`
-
 
 ### Coverage Configuration
 

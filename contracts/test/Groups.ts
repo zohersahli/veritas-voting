@@ -47,8 +47,7 @@ describe("Groups (Hardhat)", function () {
   });
 
   async function setNextTimestamp(ts: number) {
-    // EN: Set timestamp for the next mined block (the tx block).
-    // AR: نحدد وقت البلوك القادم (بلوك المعاملة نفسها).
+    // Set timestamp for the next mined block (the tx block).
     await ethers.provider.send("evm_setNextBlockTimestamp", [ts]);
   }
 

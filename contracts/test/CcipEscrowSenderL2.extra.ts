@@ -48,8 +48,7 @@ describe("CcipEscrowSenderL2 extra coverage (Hardhat)", function () {
   }
 
   async function finalize(core: any, pollId: bigint) {
-    // AR: اسم الدالة عندك finalizePollOnL2
-    // EN: call finalizePollOnL2
+    // call finalizePollOnL2
     await core.finalizePollOnL2(pollId);
   }
 
@@ -273,12 +272,12 @@ describe("CcipEscrowSenderL2 extra coverage (Hardhat)", function () {
     const end = now + 30;
 
     await mintAndApprove(link, owner, await core.getAddress(), parseEther("100"));
-    // Quorum enabled مع bps = 6000 (60%)
+    // Quorum enabled with bps = 6000 (60%)
     await core.connect(owner).createPollWithLinkEscrow(groupId, "T", "cid", ["Yes", "No"], start, end, true, 6000);
 
     const pollId = await core.nextPollId();
 
-    // بدون أصوات => FailedQuorum بعد finalize
+    // No votes => FailedQuorum after finalize
     await setTime(end + 1);
     await finalize(core, pollId);
 
@@ -306,7 +305,7 @@ describe("CcipEscrowSenderL2 extra coverage (Hardhat)", function () {
 
     await router.connect(owner).ccipSend(2222n, ackMsg as any);
 
-    // حتى مع ACK، claim platform fee يجب أن يرجع NotReadyStatus لأن status = FailedQuorum
+    // Even with ACK, claim platform fee should revert NotReadyStatus because status = FailedQuorum
     await expect(core.connect(owner).claimPlatformFee(pollId)).to.revert(ethers);
   });
 

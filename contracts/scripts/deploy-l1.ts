@@ -2,8 +2,7 @@ import { network } from "hardhat";
 import { saveDeployment } from "./utils/saveDeployment.js";
 
 /*
-AR: Deploy L1 Receiver+Registry.
-EN: Deploy L1 Receiver+Registry.
+Deploy L1 Receiver+Registry.
 
 Localhost:
 - Deploy MockCcipRouter (selector=999)
@@ -47,8 +46,7 @@ async function main() {
   let allowedSourceSelector: bigint;
 
   if (isLocal) {
-    // AR: نشر راوتر CCIP وهمي على localhost
-    // EN: Deploy mock CCIP router on localhost
+    // Deploy mock CCIP router on localhost
     const MockRouter = await ethers.getContractFactory("MockCcipRouter");
 
     // selector=999, flatFee=1 LINK (in wei units of LINK token decimals, mock usage)
@@ -64,8 +62,7 @@ async function main() {
     allowedSourceSelector = BigInt(requireEnv("CCIP_SOURCE_CHAIN_SELECTOR"));
   }
 
-  // AR: allowedSender مؤقتا deployer, سيتم تحديثه لاحقا إلى VeritasCore على L2
-  // EN: allowedSender temporary deployer, will be updated later to VeritasCore on L2
+  // allowedSender temporary deployer, will be updated later to VeritasCore on L2
   const initialAllowedSender = deployer.address;
 
   const ReceiverRegistry = await ethers.getContractFactory("VeritasCcipReceiverRegistry");

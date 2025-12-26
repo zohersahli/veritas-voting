@@ -6,6 +6,5 @@ import { ReentrancyGuard } from "@openzeppelin/contracts/utils/ReentrancyGuard.s
 
 /*
    Shared security base so modules can use whenNotPaused + nonReentrant.
-   أساس أمني مشترك لكي تستخدم الموديولات whenNotPaused و nonReentrant.
 */
 abstract contract VeritasSecurity is Pausable, ReentrancyGuard {}
