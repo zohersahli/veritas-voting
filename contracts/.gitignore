@@ -23,5 +23,10 @@
 .env
 .env.*
 
+# Solidity compiler binary (large file, can be downloaded)
+/tools/solc/
 
 deployments/localhost.json
+
+# Project status report (local tracking only, not for GitHub)
+docs/reports/PROJECT_STATUS.md

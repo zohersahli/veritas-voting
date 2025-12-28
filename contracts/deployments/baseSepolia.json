@@ -1,0 +1,8 @@
+{
+  "network": "baseSepolia",
+  "chainId": 84532,
+  "updatedAt": "2025-12-27T16:57:32.444Z",
+  "l2": {
+    "VeritasCore": "0x411947c4C08E0583A84E58d48f108c136978c11D"
+  }
+}

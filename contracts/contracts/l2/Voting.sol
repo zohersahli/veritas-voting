@@ -1,51 +1,85 @@
 // SPDX-License-Identifier: MIT
-pragma solidity 0.8.31;
-import { SharedErrors } from "./SharedErrors.sol";
-/// @title Voting (L2) | التصويت على L2
-/// @notice Handles casting votes and preventing double-voting (skeleton).
-///         ينفذ التصويت ويمنع التكرار (سكلتون).
-/// @dev Membership + poll timing checks will be wired later.
-///      التحقق من العضوية والتوقيت سيتم ربطه لاحقا.
+pragma solidity ^0.8.30;
 
+import { SharedErrors } from "./SharedErrors.sol";
+
+/// @title Voting (L2)
+/// @notice Cast votes with full checks: poll exists, timing, option bounds, membership, and delegation.
+/// Voting with delegation support (weighted votes).
 abstract contract Voting {
     // -----------------------------
-    // Errors | أخطاء
+    // Errors
     // -----------------------------
-    error BadOption(uint256 optionIndex);
+    error VotingPollDoesNotExist(uint256 pollId);
+    error VotingPollNotStarted(uint256 pollId, uint64 startTime, uint64 nowTs);
+    error VotingPollEnded(uint256 pollId, uint64 endTime, uint64 nowTs);
+    error VotingBadOption(uint256 optionIndex);
+    error VotingNotMember(uint256 groupId, address user);
+    error VotingDelegated(uint256 pollId, address delegator, address delegate);
 
     // -----------------------------
-    // Storage | تخزين
+    // Storage
     // -----------------------------
-    mapping(uint256 => mapping(address => bool)) public hasVoted; // pollId => voter => bool
-
-    // voteCounts[pollId][optionIndex] = count
+    mapping(uint256 => mapping(address => bool)) public hasVoted;
     mapping(uint256 => mapping(uint256 => uint256)) public voteCounts;
 
     // -----------------------------
-    // Events | أحداث
+    // Events
     // -----------------------------
     event VoteCast(uint256 indexed pollId, address indexed voter, uint256 optionIndex);
+    event VoteCastWeighted(uint256 indexed pollId, address indexed voter, uint256 optionIndex, uint256 weight);
 
     // -----------------------------
-    // Vote | تصويت
+    // Hooks (wired by VeritasCore)
     // -----------------------------
-    /// @notice Cast a vote for a poll option.
-    ///         تسجيل صوت لخيار داخل Poll.
-    function vote(uint256 pollId, uint256 optionIndex) external {
-        if (hasVoted[pollId][msg.sender]) revert SharedErrors.AlreadyVoted(pollId, msg.sender);
+    function _pollVotingData(uint256 pollId)
+        internal
+        view
+        virtual
+        returns (bool exists_, uint256 groupId, uint64 startTime, uint64 endTime, uint256 optionsLength);
 
-        // TODO:
-        // - Verify poll exists via Polls.sol
-        // - Verify poll is active (startTime <= now < endTime)
-        // - Verify membership via Groups.sol + Membership.sol
-        // - Validate optionIndex within poll options length
+    function _isMemberForVoting(uint256 groupId, address user) internal view virtual returns (bool);
 
-        // Placeholder option check (disabled until Polls integration)
-        // if (optionIndex is invalid) revert BadOption(optionIndex);
+    function _delegateOfForVoting(uint256 pollId, address delegator) internal view virtual returns (address);
+
+    function _delegatedToCountForVoting(uint256 pollId, address delegate) internal view virtual returns (uint256);
+
+    // -----------------------------
+    // Vote
+    // -----------------------------
+    function vote(uint256 pollId, uint256 optionIndex) public virtual {
+        if (hasVoted[pollId][msg.sender]) {
+            revert SharedErrors.AlreadyVoted(pollId, msg.sender);
+        }
+
+        (bool exists_, uint256 groupId, uint64 startTime, uint64 endTime, uint256 optionsLength) =
+            _pollVotingData(pollId);
+
+        if (!exists_) revert VotingPollDoesNotExist(pollId);
+
+        uint64 nowTs = uint64(block.timestamp);
+        if (nowTs < startTime) revert VotingPollNotStarted(pollId, startTime, nowTs);
+        if (nowTs >= endTime) revert VotingPollEnded(pollId, endTime, nowTs);
+
+        if (optionIndex >= optionsLength) revert VotingBadOption(optionIndex);
+
+        if (!_isMemberForVoting(groupId, msg.sender)) revert VotingNotMember(groupId, msg.sender);
+
+        address delegate_ = _delegateOfForVoting(pollId, msg.sender);
+        if (delegate_ != address(0)) {
+            revert VotingDelegated(pollId, msg.sender, delegate_);
+        }
+
+        uint256 delegatedToCount = _delegatedToCountForVoting(pollId, msg.sender);
+        uint256 weight = 1 + delegatedToCount;
 
         hasVoted[pollId][msg.sender] = true;
-        voteCounts[pollId][optionIndex] += 1;
+
+        unchecked {
+            voteCounts[pollId][optionIndex] += weight;
+        }
 
         emit VoteCast(pollId, msg.sender, optionIndex);
+        emit VoteCastWeighted(pollId, msg.sender, optionIndex, weight);
     }
 }

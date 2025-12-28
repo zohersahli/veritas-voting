@@ -1,0 +1,8 @@
+{
+  "network": "ethereumSepolia",
+  "chainId": 11155111,
+  "updatedAt": "2025-12-27T09:51:48.912Z",
+  "l1": {
+    "VeritasCcipReceiverRegistry": "0x2718a6057cE3d0a57a219Abe21612eD104457f7C"
+  }
+}

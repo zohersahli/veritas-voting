@@ -1,0 +1,4 @@
+{
+  "filter_paths": "contracts[\\\\/]contracts[\\\\/](mocks|legacy|test)|(^|[\\\\/])(legacy|test|node_modules|artifacts|cache|coverage|types|deployments)([\\\\/]|$)",
+  "exclude_dependencies": true
+}
