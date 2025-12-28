@@ -2,35 +2,35 @@ import type { HardhatUserConfig } from "hardhat/config";
 import hardhatEthers from "@nomicfoundation/hardhat-ethers";
 import hardhatIgnition from "@nomicfoundation/hardhat-ignition";
 import hardhatToolboxMochaEthers from "@nomicfoundation/hardhat-toolbox-mocha-ethers";
-import hardhatVerify from "@nomicfoundation/hardhat-verify";
 import * as dotenv from "dotenv";
+
 
 dotenv.config();
 
+// -----------------------------------------------------------------------------
+// Coverage-specific configuration
+//  This config uses Solidity 0.8.30 for coverage compatibility.
+// -----------------------------------------------------------------------------
+// NOTE: Use this config only for coverage: npx hardhat coverage --config hardhat.coverage.config.ts
+//  Coverage tool currently doesn't support Solidity 0.8.31, so we use 0.8.30 here.
+// -----------------------------------------------------------------------------
+
 const config: HardhatUserConfig = {
-  plugins: [hardhatEthers, hardhatIgnition ,
-    hardhatToolboxMochaEthers, hardhatVerify],
+  plugins: [hardhatEthers, hardhatIgnition, hardhatToolboxMochaEthers],
   solidity: {
-    version: "0.8.31", // Primary Solidity version
+    version: "0.8.30", // Coverage-compatible version
     settings: {
       optimizer: {
-        enabled: true,   // Enable optimizer
-        runs: 200,       // Suitable for governance contracts
-
+        enabled: true,
+        runs: 200,
       },
-      viaIR: true, // Additional optimization via IR
+      viaIR: true,
     },
   },
-  verify: {
-    etherscan: {
-      apiKey: process.env.ETHERSCAN_API_KEY || "",
-    },
-  },
-  
+
   networks: {
     // -------------------------------------------------------------------------
-    // Local simulated network for testing
-    // Hardhat provides a fast local L1 network for testing.
+    // Local network for testing
     // -------------------------------------------------------------------------
     hardhat: {
       type: "edr-simulated",
@@ -41,36 +41,34 @@ const config: HardhatUserConfig = {
       type: "http",
       chainType: "l1",
       url: "http://127.0.0.1:8545",
-      //accounts: process.env.PRIVATE_KEY ? [process.env.PRIVATE_KEY] : [],
       accounts: {
-      mnemonic: "test test test test test test test test test test test junk",
-      count: 10,
+        mnemonic: "test test test test test test test test test test test junk",
+        count: 10,
       },
     },
 
     // -------------------------------------------------------------------------
     // Ethereum Sepolia — Layer 1
-    // This is where final voting results are stored on L1.
     // -------------------------------------------------------------------------
     ethereumSepolia: {
       type: "http",
       chainType: "l1",
-      url: process.env.ETHEREUM_SEPOLIA_RPC_URL || "", // RPC URL from Alchemy
-      accounts: process.env.PRIVATE_KEY ? [process.env.PRIVATE_KEY] : [], // Testnet private key
+      url: process.env.ETHEREUM_SEPOLIA_RPC_URL || "",
+      accounts: process.env.PRIVATE_KEY ? [process.env.PRIVATE_KEY] : [],
     },
 
     // -------------------------------------------------------------------------
     // Base Sepolia — Layer 2
-    // Base uses Optimism Stack → chainType must be "op".
     // -------------------------------------------------------------------------
     baseSepolia: {
       type: "http",
-      chainType: "op", // Base is OP Stack — important for correct config
-      url: process.env.BASE_SEPOLIA_RPC_URL || "", // RPC for Base Sepolia
-      accounts: process.env.PRIVATE_KEY ? [process.env.PRIVATE_KEY] : [], // Same testnet account
+      chainType: "op",
+      url: process.env.BASE_SEPOLIA_RPC_URL || "",
+      accounts: process.env.PRIVATE_KEY ? [process.env.PRIVATE_KEY] : [],
     },
-
   },
 };
 
 export default config;
+
+

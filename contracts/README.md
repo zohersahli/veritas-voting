@@ -55,3 +55,37 @@ After setting the variable, you can run the deployment with the Sepolia network:
 ```shell
 npx hardhat ignition deploy --network sepolia ignition/modules/Counter.ts
 ```
+
+
+## Deployment config (L1 + L2)
+
+### 1 Environment files
+- `.env` is for local secrets and machine-specific values. It must NOT be committed.
+- `.env.example` is the template that everyone can copy from.
+
+### 2 Required env vars (copy to .env)
+Create a new file `.env` in this folder and set:
+
+- `ETHEREUM_SEPOLIA_RPC_URL`
+- `BASE_SEPOLIA_RPC_URL`
+- `PRIVATE_KEY` (testnet key only, never mainnet)
+- `TREASURY_ADDRESS` (where platform fees go, e.g. 7% and 3%)
+- `EXECUTOR_COMPENSATION_WEI` (fixed compensation paid from deposit)
+- `CONFIRM_TESTNET_DEPLOY` (keep empty unless you intentionally deploy)
+
+### 3 Safety switch
+- L2 deploy script blocks non-local deployments by default.
+- To allow deploying to a real testnet, set:
+  - `CONFIRM_TESTNET_DEPLOY="YES"`
+
+### 4 Local deploy commands (hardhat)
+From `H:\veritas\contracts`:
+
+- Deploy L1 locally:
+  - `npx hardhat run .\scripts\deploy-l1.ts --network hardhat`
+- Deploy L2 locally:
+  - `npx hardhat run .\scripts\deploy-l2.ts --network hardhat`
+
+### 5 Notes
+- The printed addresses when using `--network hardhat` are local and change each run/reset.
+- Real testnet addresses should be saved later in frontend env vars after actual deployment.
