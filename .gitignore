@@ -21,3 +21,6 @@ coverage/
 .DS_Store
 Thumbs.db
 .vscode/
+
+# temp folder after rename
+contracts/node_modules_old/
