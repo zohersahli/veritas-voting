@@ -3,12 +3,16 @@
   "version": "1.0.0",
   "type": "module",
   "scripts": {
+    "compile": "hardhat compile",
+    "postcompile": "node scripts/copy-contract-info.cjs",
+    "build": "npm run compile",
     "coverage": "hardhat coverage --config hardhat.coverage.config.ts"
   },
   "devDependencies": {
     "@nomicfoundation/hardhat-ethers": "^4.0.3",
     "@nomicfoundation/hardhat-ignition": "^3.0.6",
     "@nomicfoundation/hardhat-toolbox-mocha-ethers": "^3.0.2",
+    "@nomicfoundation/hardhat-verify": "^3.0.8",
     "@types/chai": "^4.3.20",
     "@types/chai-as-promised": "^8.0.2",
     "@types/mocha": "^10.0.10",

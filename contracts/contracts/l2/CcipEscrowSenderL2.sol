@@ -10,6 +10,8 @@ Per-poll LINK escrow on L2:
 - allows leftover withdrawal by the poll creator after send
 */
 
+
+import { CCIPReceiver } from "@chainlink/contracts-ccip/contracts/applications/CCIPReceiver.sol";
 import { IRouterClient } from "@chainlink/contracts-ccip/contracts/interfaces/IRouterClient.sol";
 import { Client } from "@chainlink/contracts-ccip/contracts/libraries/Client.sol";
 
@@ -23,7 +25,7 @@ import { Pausable } from "@openzeppelin/contracts/utils/Pausable.sol";
 import { ReentrancyGuard } from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 
 
-abstract contract CcipEscrowSenderL2 is Polls, FinalizationL2, Ownable, Pausable, ReentrancyGuard {
+abstract contract CcipEscrowSenderL2 is CCIPReceiver, Polls, FinalizationL2, Ownable, Pausable, ReentrancyGuard {
     using SafeERC20 for IERC20;
 
     // -----------------------------
@@ -48,7 +50,6 @@ abstract contract CcipEscrowSenderL2 is Polls, FinalizationL2, Ownable, Pausable
     // -----------------------------
     // Storage: Config
     // -----------------------------
-    IRouterClient public immutable ccipRouter;
     IERC20 public immutable linkToken;
 
     uint64 public immutable destinationChainSelector;
@@ -142,13 +143,12 @@ abstract contract CcipEscrowSenderL2 is Polls, FinalizationL2, Ownable, Pausable
         address _l1Receiver,
         address _treasury,
         uint256 _receiverGasLimit
-    ) {
+    ) CCIPReceiver(router) {
         if (router == address(0) || link == address(0) || _l1Receiver == address(0) || _treasury == address(0)) {
             revert BadConfig();
         }
         if (destSelector == 0 || _receiverGasLimit == 0) revert BadConfig();
 
-        ccipRouter = IRouterClient(router);
         linkToken = IERC20(link);
 
         destinationChainSelector = destSelector;
@@ -228,7 +228,7 @@ abstract contract CcipEscrowSenderL2 is Polls, FinalizationL2, Ownable, Pausable
         Client.EVM2AnyMessage memory msgForQuote =
             _buildMessage(groupId, pollId, uint8(ResultStatus.Unknown), bytes32(0));
 
-        uint256 fee = ccipRouter.getFee(destinationChainSelector, msgForQuote);
+        uint256 fee = IRouterClient(getRouter()).getFee(destinationChainSelector, msgForQuote);
 
         // 3) Apply margin
         uint256 maxFee = fee + ((fee * feeMarginBps) / 10_000) + feeMarginFlat;
@@ -301,15 +301,14 @@ abstract contract CcipEscrowSenderL2 is Polls, FinalizationL2, Ownable, Pausable
         bytes32 resultHash = _computeResultHash(pollId);
         Client.EVM2AnyMessage memory message = _buildMessage(e.groupId, pollId, uint8(r.status), resultHash);
 
-        uint256 fee = ccipRouter.getFee(destinationChainSelector, message);
+        uint256 fee = IRouterClient(getRouter()).getFee(destinationChainSelector, message);
 
         if (fee > e.deposited) {
             revert InsufficientEscrow(pollId, fee, e.deposited);
         }
 
-        linkToken.forceApprove(address(ccipRouter), fee);
+        linkToken.forceApprove(getRouter(), fee);
 
-        // effects before external call
         e.sent = true;
         e.deposited -= fee;
 
@@ -317,7 +316,7 @@ abstract contract CcipEscrowSenderL2 is Polls, FinalizationL2, Ownable, Pausable
             e.reservedPlatform = 0;
         }
 
-        messageId = ccipRouter.ccipSend(destinationChainSelector, message);
+        messageId = IRouterClient(getRouter()).ccipSend(destinationChainSelector, message);
 
         emit ResultSentToL1(pollId, messageId, fee);
     }
@@ -414,8 +413,7 @@ abstract contract CcipEscrowSenderL2 is Polls, FinalizationL2, Ownable, Pausable
         emit AckConfigUpdated(sourceSelector, sender);
     }
 
-    function ccipReceive(Client.Any2EVMMessage calldata message) external {
-        if (msg.sender != address(ccipRouter)) revert BadConfig();
+    function _ccipReceive(Client.Any2EVMMessage memory message) internal override {
         if (message.sourceChainSelector != ackSourceChainSelector) {
             revert UnauthorizedAckSourceChain(message.sourceChainSelector);
         }
@@ -426,10 +424,7 @@ abstract contract CcipEscrowSenderL2 is Polls, FinalizationL2, Ownable, Pausable
         (uint256 groupId, uint256 pollId, uint8 statusRaw, bytes32 resultHash, bytes32 inboundMessageId) =
             abi.decode(message.data, (uint256, uint256, uint8, bytes32, bytes32));
 
-        // Keep decode stable for audit clarity (statusRaw and resultHash not used in ACK processing)
-        // slither-disable-next-line redundant-statements
         statusRaw;
-        // slither-disable-next-line redundant-statements
         resultHash;
 
         bytes32 k = keccak256(abi.encode(groupId, pollId));

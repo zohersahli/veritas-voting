@@ -2,29 +2,14 @@ import type { HardhatUserConfig } from "hardhat/config";
 import hardhatEthers from "@nomicfoundation/hardhat-ethers";
 import hardhatIgnition from "@nomicfoundation/hardhat-ignition";
 import hardhatToolboxMochaEthers from "@nomicfoundation/hardhat-toolbox-mocha-ethers";
+import hardhatVerify from "@nomicfoundation/hardhat-verify";
 import * as dotenv from "dotenv";
 
 dotenv.config();
 
-// -----------------------------------------------------------------------------
-// Future Notes for the Project:
-// -----------------------------------------------------------------------------
-// 1) hardhat-verify can be added later for contract verification on Etherscan.
-//
-// 2) Custom optimizer profiles can be added for production deployments.
-//
-// 3) Additional L2 networks (Optimism / Arbitrum) can be added for scaling.
-//
-// 4) Hardhat v3 is compatible with Foundry — Forge tests can be added later.
-//
-// 5) PRIVATE_KEY must belong to a testnet account only.
-//
-// 6) RPC URLs from Alchemy will be added in the .env file later.
-// -----------------------------------------------------------------------------
-
 const config: HardhatUserConfig = {
   plugins: [hardhatEthers, hardhatIgnition ,
-    hardhatToolboxMochaEthers],
+    hardhatToolboxMochaEthers, hardhatVerify],
   solidity: {
     version: "0.8.31", // Primary Solidity version
     settings: {
@@ -36,7 +21,12 @@ const config: HardhatUserConfig = {
       viaIR: true, // Additional optimization via IR
     },
   },
-
+  verify: {
+    etherscan: {
+      apiKey: process.env.ETHERSCAN_API_KEY || "",
+    },
+  },
+  
   networks: {
     // -------------------------------------------------------------------------
     // Local simulated network for testing
@@ -57,9 +47,6 @@ const config: HardhatUserConfig = {
       count: 10,
       },
     },
-
-    
-
 
     // -------------------------------------------------------------------------
     // Ethereum Sepolia — Layer 1
@@ -83,9 +70,6 @@ const config: HardhatUserConfig = {
       accounts: process.env.PRIVATE_KEY ? [process.env.PRIVATE_KEY] : [], // Same testnet account
     },
 
-    // -------------------------------------------------------------------------
-    // Note: You can add additional networks later such as Optimism / Arbitrum.
-    // -------------------------------------------------------------------------
   },
 };
 

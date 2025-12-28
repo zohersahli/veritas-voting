@@ -196,12 +196,112 @@ npx hardhat test test/VeritasCore.ts
 
 ---
 
+## Smoke Test on Testnet
+
+### Overview
+
+A comprehensive end-to-end smoke test was conducted on Ethereum Sepolia (L1) and Base Sepolia (L2) testnets to validate the complete CCIP cross-chain voting flow.
+
+**Test Date:** December 27, 2025  
+**Test Script:** `scripts/test-ccip-testnet.ts`  
+**Networks:** 
+- L1: Ethereum Sepolia
+- L2: Base Sepolia
+
+### Test Flow
+
+The smoke test validates the complete voting lifecycle:
+
+1. **Group Creation** - Create groups on L2 (ensures fresh `groupId`)
+2. **LINK Approval** - Approve LINK tokens for VeritasCore
+3. **Poll Creation** - Create poll with LINK escrow
+4. **Voting** - Cast vote on L2
+5. **Finalization** - Finalize poll results on L2
+6. **L2→L1 Message** - Send results to L1 via CCIP
+7. **L1 Record** - Verify results recorded on L1
+8. **L1→L2 ACK** - Verify ACK received on L2
+
+### Test Results
+
+**Status:** ✅ **PASSED**
+
+#### Test Execution Details
+
+- **GroupId:** 5 (fresh, not used on L1 before)
+- **PollId:** 3
+- **Key:** `0x405aad32e1adbac89bb7f176e338b8fc6e994ca210c9bb7bdca249b465942250`
+- **L2→L1 MessageId:** `0x5efca5fe6e1a47d9c7611106168a507e67c993f55d28bb0e20d9e7eb89b9bd35`
+- **L1→L2 ACK MessageId:** `0xf56fa1f91dde1f18f8678674f855b8ac72f66d276bb568bd14b2847b517c3de5`
+
+#### Contract Addresses
+
+- **L1 Receiver Registry:** `0x2718a6057cE3d0a57a219Abe21612eD104457f7C` (Ethereum Sepolia)
+- **L2 VeritasCore:** `0x411947c4C08E0583A84E58d48f108c136978c11D` (Base Sepolia)
+
+#### Verification Points
+
+✅ **L2→L1 Message:** Successfully sent via CCIP  
+✅ **L1 Record:** Results recorded on L1 (`isRecorded: true`)  
+✅ **L1→L2 ACK:** ACK successfully received on L2 (`ackReceived: true`)  
+✅ **Message Matching:** L1 record contains correct `messageId` matching L2→L1 message
+
+### Test Configuration
+
+**Timeout Settings:**
+- L1 Record Wait: 60 minutes
+- ACK Wait: 60 minutes
+- Poll Interval: 15 seconds
+
+**Network Configuration:**
+- CCIP Router (L1): Ethereum Sepolia CCIP Router
+- CCIP Router (L2): Base Sepolia CCIP Router
+- LINK Token (L1): `0x779877A7B0D9E8603169DdbD7836e478b4624789`
+- LINK Token (L2): `0xE4aB69C077896252FAFBD49EFD26B5D171A32410`
+
+### Key Improvements Made
+
+1. **Contract Fix:** Refactored `CcipEscrowSenderL2` to inherit `CCIPReceiver` from Chainlink, fixing `msg.sender` validation issues
+2. **Fresh GroupId:** Script creates two groups and uses the second one to ensure a fresh `groupId` on L1
+3. **MessageId Verification:** Added explicit `messageId` matching to prevent false positives from old records
+4. **Extended Timeouts:** Increased timeouts to 60 minutes to accommodate CCIP latency on testnet
+5. **Enhanced Logging:** Added comprehensive test summary with all relevant IDs
+
+### Running the Smoke Test
+
+```bash
+# Run smoke test on Base Sepolia
+npx hardhat run .\scripts\test-ccip-testnet.ts --network baseSepolia
+```
+
+**Prerequisites:**
+- L1 and L2 contracts deployed
+- Cross-chain configuration completed (`configure-l1.ts` and `configure-l2.ts`)
+- Sufficient LINK balance on L2 for CCIP fees
+- Sufficient LINK balance on L1 Receiver for ACK fees
+- Sufficient ETH balance on L1 Receiver for gas
+
+### Troubleshooting
+
+If the test times out:
+1. Check CCIP Explorer for message status: https://ccip.chain.link/
+2. Verify L1 record manually:
+   ```bash
+   npx hardhat run .\scripts\check-status.ts --network ethereumSepolia
+   ```
+3. Verify L2 ACK status:
+   ```bash
+   npx hardhat run .\scripts\check-status.ts --network baseSepolia
+   ```
+
+---
+
 ## Conclusion
 
 All tests pass successfully. The test suite provides comprehensive coverage of production code functionality, including edge cases and error conditions. The codebase is well-tested and ready for deployment.
 
 **Test Status:** ✅ All Tests Passing  
 **Coverage Status:** ✅ Comprehensive  
+**Smoke Test:** ✅ Passed on Testnet  
 **Readiness:** ✅ Ready for Testnet
 
 ---
