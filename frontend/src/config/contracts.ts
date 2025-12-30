@@ -9,6 +9,12 @@ export const CONTRACTS = {
   },
   baseSepolia: {
     chainId: 84532,
-    VeritasCore: '0x411947c4C08E0583A84E58d48f108c136978c11D'
+    VeritasCore: '0x411947c4C08E0583A84E58d48f108c136978c11D',
+    LinkToken: '0xE4aB69C077896252FAFBD49EFD26B5D171A32410' // Base Sepolia LINK token
   }
+} as const;
+
+export const CHAIN_IDS = {
+  baseSepolia: CONTRACTS.baseSepolia.chainId,
+  ethereumSepolia: CONTRACTS.ethereumSepolia.chainId
 } as const;
