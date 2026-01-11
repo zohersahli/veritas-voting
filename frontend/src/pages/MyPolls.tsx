@@ -1,13 +1,12 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useConnection } from "wagmi";
-import type { ContractFunctionParameters } from "viem";
-import { parseAbiItem, zeroAddress, createPublicClient, http } from "viem";
-import { baseSepolia } from "viem/chains";
+import { parseAbiItem, zeroAddress } from "viem";
 
-import { veritasCoreAbi, veritasCoreAddress, PollStatus } from "@/lib/veritas";
+import { veritasCoreAddress, PollStatus } from "@/lib/veritas";
 import { CHAIN_IDS } from "@/config/contracts";
 import { VERITASCORE_DEPLOY_BLOCK } from "@/config/deploy";
+import { logsClient, fetchChunked, LOG_CHUNK_RANGE } from "@/lib/logsClient";
 
 import { Button } from "@/components/ui/Button";
 import { PollCard } from "@/components/PollCard";
@@ -15,47 +14,51 @@ import { EmptyState } from "@/components/EmptyState";
 import { CardSkeleton } from "@/components/LoadingSkeleton";
 import { Plus, Vote, CheckCircle, Grid, List } from "lucide-react";
 import { Badge } from "@/components/ui/Badge";
+import { computeStatus } from "@/lib/polls/pollStatus";
+import { useNowSeconds } from "@/hooks/useNowSeconds";
+import { loadPollDetails } from "@/lib/polls/loadPollDetails";
+import type { PollRawItem } from "@/lib/polls/loadPollDetails";
+
 
 type StatusFilter = "all" | PollStatus;
 
-type PollRawItem = {
-  id: bigint;
-  title: string;
-  startTime: bigint;
-  endTime: bigint;
-  finalized: boolean;
-  hasVoted: boolean;
-};
+//type PollRawItem = {
+//  id: bigint;
+//  title: string;
+//  startTime: bigint;
+//  endTime: bigint;
+//  finalized: boolean;
+//  hasVoted: boolean;
+//};
 
-type MulticallItem =
-  | { status: "success"; result: unknown }
-  | { status: "failure"; error: unknown };
+//type MulticallItem =
+//  | { status: "success"; result: unknown }
+//  | { status: "failure"; error: unknown };
+//
+//type PollMetaResult = readonly [
+//  bigint, // id
+//  bigint, // groupId
+//  `0x${string}`, // creator
+//  string, // title
+//  string, // cid
+//  bigint, // startTime
+//  bigint, // endTime
+//  boolean, // quorumEnabled
+//  bigint | number, // quorumBps
+//  bigint, // eligibleCountSnapshot
+//  bigint, // createdAt
+//  bigint // optionsLength
+//];
 
-type PollMetaResult = readonly [
-  bigint, // id
-  bigint, // groupId
-  `0x${string}`, // creator
-  string, // title
-  string, // cid
-  bigint, // startTime
-  bigint, // endTime
-  boolean, // quorumEnabled
-  bigint | number, // quorumBps
-  bigint, // eligibleCountSnapshot
-  bigint, // createdAt
-  bigint // optionsLength
-];
+//function useNowSeconds() {
+//  const [now, setNow] = useState(() => Math.floor(Date.now() / 1000));
+//  useEffect(() => {
+//    const t = window.setInterval(() => setNow(Math.floor(Date.now() / 1000)), 1000);
+//    return () => window.clearInterval(t);
+//  }, []);
+//  return now;
+//}
 
-function useNowSeconds() {
-  const [now, setNow] = useState(() => Math.floor(Date.now() / 1000));
-  useEffect(() => {
-    const t = window.setInterval(() => setNow(Math.floor(Date.now() / 1000)), 1000);
-    return () => window.clearInterval(t);
-  }, []);
-  return now;
-}
-
-// Strong typed events (no ABI-name issues, no decodeEventLog needed)
 const POLL_CREATED_EVENT = parseAbiItem(
   "event PollCreated(uint256 indexed pollId, uint256 indexed groupId, address indexed creator, string title, string cid, uint64 startTime, uint64 endTime, bool quorumEnabled, uint16 quorumBps, uint256 eligibleCountSnapshot)"
 );
@@ -64,14 +67,6 @@ const VOTE_CAST_EVENT = parseAbiItem(
   "event VoteCast(uint256 indexed pollId, address indexed voter, uint256 optionIndex)"
 );
 
-// Use Base Sepolia Public RPC for event queries (supports 100k blocks vs Alchemy's 10)
-const logsClient = createPublicClient({
-  chain: baseSepolia,
-  transport: http("https://sepolia.base.org"),
-});
-
-// Keep under provider max range (safer with 5k blocks)
-const MAX_BLOCK_RANGE = 5_000n;
 
 function uniqueBigints(ids: bigint[]) {
   const seen = new Set<string>();
@@ -85,156 +80,153 @@ function uniqueBigints(ids: bigint[]) {
   return out;
 }
 
-function toBoolFinalized(result: unknown): boolean {
-  if (!result) return false;
+//function toBoolFinalized(result: unknown): boolean {
+//  if (!result) return false;
+//
+//  if (typeof result === "object" && result !== null) {
+//    const r = result as Record<string, unknown>;
+//    if (typeof r.finalized === "boolean") return r.finalized;
+//  }
+//
+//  if (Array.isArray(result) && typeof result[0] === "boolean") return result[0];
+//
+//  return false;
+//}
 
-  if (typeof result === "object" && result !== null) {
-    const r = result as Record<string, unknown>;
-    if (typeof r.finalized === "boolean") return r.finalized;
-  }
-
-  if (Array.isArray(result) && typeof result[0] === "boolean") return result[0];
-
-  return false;
-}
-
-function computeStatus(nowSec: number, startTime: bigint, endTime: bigint, finalized: boolean): PollStatus {
-  const start = Number(startTime);
-  const end = Number(endTime);
-
-  if (Number.isFinite(start) && nowSec < start) return PollStatus.Upcoming;
-  if (Number.isFinite(end) && nowSec < end) return PollStatus.Active;
-  return finalized ? PollStatus.Finalized : PollStatus.Ended;
-}
+//function computeStatus(nowSec: number, startTime: bigint, endTime: bigint, finalized: boolean): PollStatus {
+//  const start = Number(startTime);
+//  const end = Number(endTime);
+//
+//  if (Number.isFinite(start) && nowSec < start) return PollStatus.Upcoming;
+//  if (Number.isFinite(end) && nowSec < end) return PollStatus.Active;
+//  return finalized ? PollStatus.Finalized : PollStatus.Ended;
+//}
 
 async function fetchPollIdsCreatedBy(creator: `0x${string}`): Promise<bigint[]> {
-  const latestBlock = await logsClient.getBlockNumber();
-  let fromBlock = VERITASCORE_DEPLOY_BLOCK;
+  const latestBlock = await logsClient.getBlockNumber({ cacheTime: 0 });
+  const fromBlock = VERITASCORE_DEPLOY_BLOCK;
+
+  const logs = await fetchChunked(
+    fromBlock,
+    latestBlock,
+    LOG_CHUNK_RANGE,
+    (fb, tb) =>
+      logsClient.getLogs({
+        address: veritasCoreAddress,
+        event: POLL_CREATED_EVENT,
+        args: { creator },
+        fromBlock: fb,
+        toBlock: tb,
+      })
+  );
 
   const ids: bigint[] = [];
-
-  while (fromBlock <= latestBlock) {
-    let toBlock = fromBlock + MAX_BLOCK_RANGE - 1n;
-    if (toBlock > latestBlock) toBlock = latestBlock;
-
-    const logs = await logsClient.getLogs({
-      address: veritasCoreAddress,
-      event: POLL_CREATED_EVENT,
-      args: { creator },
-      fromBlock,
-      toBlock,
-    });
-
-    for (const l of logs) {
-      const pollId = l.args?.pollId;
-      if (typeof pollId === "bigint") ids.push(pollId);
-    }
-
-    fromBlock = toBlock + 1n;
+  for (const l of logs) {
+    const pollId = l.args?.pollId;
+    if (typeof pollId === "bigint") ids.push(pollId);
   }
 
   return uniqueBigints(ids);
 }
 
 async function fetchPollIdsVotedBy(voter: `0x${string}`): Promise<bigint[]> {
-  const latestBlock = await logsClient.getBlockNumber();
-  let fromBlock = VERITASCORE_DEPLOY_BLOCK;
+  const latestBlock = await logsClient.getBlockNumber({ cacheTime: 0 });
+  const fromBlock = VERITASCORE_DEPLOY_BLOCK;
+
+  const logs = await fetchChunked(
+    fromBlock,
+    latestBlock,
+    LOG_CHUNK_RANGE,
+    (fb, tb) =>
+      logsClient.getLogs({
+        address: veritasCoreAddress,
+        event: VOTE_CAST_EVENT,
+        args: { voter },
+        fromBlock: fb,
+        toBlock: tb,
+      })
+  );
 
   const ids: bigint[] = [];
-
-  while (fromBlock <= latestBlock) {
-    let toBlock = fromBlock + MAX_BLOCK_RANGE - 1n;
-    if (toBlock > latestBlock) toBlock = latestBlock;
-
-    const logs = await logsClient.getLogs({
-      address: veritasCoreAddress,
-      event: VOTE_CAST_EVENT,
-      args: { voter },
-      fromBlock,
-      toBlock,
-    });
-
-    for (const l of logs) {
-      const pollId = l.args?.pollId;
-      if (typeof pollId === "bigint") ids.push(pollId);
-    }
-
-    fromBlock = toBlock + 1n;
+  for (const l of logs) {
+    const pollId = l.args?.pollId;
+    if (typeof pollId === "bigint") ids.push(pollId);
   }
 
   return uniqueBigints(ids);
 }
 
-async function loadPollDetails(args: {
-  pollIds: bigint[];
-  viewer: `0x${string}`;
-}): Promise<PollRawItem[]> {
-  const { pollIds, viewer } = args;
-  if (pollIds.length === 0) return [];
-
-  const calls: ContractFunctionParameters[] = [];
-
-  for (const pid of pollIds) {
-    calls.push({
-      address: veritasCoreAddress,
-      abi: veritasCoreAbi,
-      functionName: "getPollMeta",
-      args: [pid],
-    } as ContractFunctionParameters);
-
-    calls.push({
-      address: veritasCoreAddress,
-      abi: veritasCoreAbi,
-      functionName: "results",
-      args: [pid],
-    } as ContractFunctionParameters);
-
-    calls.push({
-      address: veritasCoreAddress,
-      abi: veritasCoreAbi,
-      functionName: "hasVoted",
-      args: [pid, viewer],
-    } as ContractFunctionParameters);
-  }
-
-  const res = (await logsClient.multicall({
-    contracts: calls,
-    allowFailure: true,
-  })) as readonly MulticallItem[];
-
-  const out: PollRawItem[] = [];
-
-  for (let i = 0; i < pollIds.length; i++) {
-    const pid = pollIds[i];
-
-    const metaRes = res[i * 3 + 0];
-    const resultsRes = res[i * 3 + 1];
-    const votedRes = res[i * 3 + 2];
-
-    if (!metaRes || metaRes.status !== "success" || metaRes.result === undefined) continue;
-
-    const meta = metaRes.result as PollMetaResult;
-
-    const title = meta[3] ?? `Poll ${pid.toString()}`;
-    const startTime = meta[5] ?? 0n;
-    const endTime = meta[6] ?? 0n;
-
-    const finalized = resultsRes && resultsRes.status === "success" ? toBoolFinalized(resultsRes.result) : false;
-    const hasVoted = votedRes && votedRes.status === "success" ? Boolean(votedRes.result) : false;
-
-    out.push({
-      id: pid,
-      title,
-      startTime,
-      endTime,
-      finalized,
-      hasVoted,
-    });
-  }
-
-  out.sort((a, b) => (a.id > b.id ? -1 : a.id < b.id ? 1 : 0));
-  return out;
-}
+// async function loadPollDetails(args: {
+//   pollIds: bigint[];
+//   viewer: `0x${string}`;
+// }): Promise<PollRawItem[]> {
+//   const { pollIds, viewer } = args;
+//   if (pollIds.length === 0) return [];
+// 
+//   const calls: ContractFunctionParameters[] = [];
+// 
+//   for (const pid of pollIds) {
+//     calls.push({
+//       address: veritasCoreAddress,
+//       abi: veritasCoreAbi,
+//       functionName: "getPollMeta",
+//       args: [pid],
+//     } as ContractFunctionParameters);
+// 
+//     calls.push({
+//       address: veritasCoreAddress,
+//       abi: veritasCoreAbi,
+//       functionName: "results",
+//       args: [pid],
+//     } as ContractFunctionParameters);
+// 
+//     calls.push({
+//       address: veritasCoreAddress,
+//       abi: veritasCoreAbi,
+//       functionName: "hasVoted",
+//       args: [pid, viewer],
+//     } as ContractFunctionParameters);
+//   }
+// 
+//   const res = (await logsClient.multicall({
+//     contracts: calls,
+//     allowFailure: true,
+//   })) as readonly MulticallItem[];
+// 
+//   const out: PollRawItem[] = [];
+// 
+//   for (let i = 0; i < pollIds.length; i++) {
+//     const pid = pollIds[i];
+// 
+//     const metaRes = res[i * 3 + 0];
+//     const resultsRes = res[i * 3 + 1];
+//     const votedRes = res[i * 3 + 2];
+// 
+//     if (!metaRes || metaRes.status !== "success" || metaRes.result === undefined) continue;
+// 
+//     const meta = metaRes.result as PollMetaResult;
+// 
+//     const title = meta[3] ?? `Poll ${pid.toString()}`;
+//     const startTime = meta[5] ?? 0n;
+//     const endTime = meta[6] ?? 0n;
+// 
+//     const finalized =
+//       resultsRes && resultsRes.status === "success" ? toBoolFinalized(resultsRes.result) : false;
+//     const hasVoted = votedRes && votedRes.status === "success" ? Boolean(votedRes.result) : false;
+// 
+//     out.push({
+//       id: pid,
+//       title,
+//       startTime,
+//       endTime,
+//       finalized,
+//       hasVoted,
+//     });
+//   }
+// 
+//   out.sort((a, b) => (a.id > b.id ? -1 : a.id < b.id ? 1 : 0));
+//   return out;
+// }
 
 export function MyPolls() {
   const navigate = useNavigate();
@@ -267,21 +259,23 @@ export function MyPolls() {
       setVotedError(null);
       return;
     }
-  
+
     const addr = address as `0x${string}`;
     let cancelled = false;
-  
+
     async function runCreated() {
       try {
         setCreatedLoading(true);
         setCreatedError(null);
-      
+
         const createdIds = await fetchPollIdsCreatedBy(addr);
         const createdDetails = await loadPollDetails({
+          publicClient: logsClient,
           pollIds: createdIds,
           viewer,
+          pollBatchSize: 50,
         });
-      
+
         if (!cancelled) setCreatedRaw(createdDetails);
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
@@ -290,18 +284,20 @@ export function MyPolls() {
         if (!cancelled) setCreatedLoading(false);
       }
     }
-  
+
     async function runVoted() {
       try {
         setVotedLoading(true);
         setVotedError(null);
-      
+
         const votedIds = await fetchPollIdsVotedBy(addr);
         const votedDetails = await loadPollDetails({
+          publicClient: logsClient,
           pollIds: votedIds,
           viewer,
+          pollBatchSize: 50,
         });
-      
+
         if (!cancelled) setVotedRaw(votedDetails);
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
@@ -310,10 +306,10 @@ export function MyPolls() {
         if (!cancelled) setVotedLoading(false);
       }
     }
-  
+
     void runCreated();
     void runVoted();
-  
+
     return () => {
       cancelled = true;
     };
@@ -322,20 +318,26 @@ export function MyPolls() {
   const createdPolls = useMemo(() => {
     return createdRaw.map((p) => ({
       id: p.id,
+      groupId: p.groupId,
       title: p.title,
+      startTime: p.startTime,
       status: computeStatus(nowSec, p.startTime, p.endTime, p.finalized),
       endTime: p.endTime,
       hasVoted: p.hasVoted,
+      voteCount: Number(p.totalVotes),
     }));
   }, [createdRaw, nowSec]);
 
   const votedPolls = useMemo(() => {
     return votedRaw.map((p) => ({
       id: p.id,
+      groupId: p.groupId,
       title: p.title,
+      startTime: p.startTime,
       status: computeStatus(nowSec, p.startTime, p.endTime, p.finalized),
       endTime: p.endTime,
       hasVoted: true,
+      voteCount: Number(p.totalVotes),
     }));
   }, [votedRaw, nowSec]);
 
@@ -464,6 +466,10 @@ export function MyPolls() {
               status={poll.status}
               endTime={poll.endTime}
               hasVoted={poll.hasVoted}
+              voteCount={poll.voteCount}
+              groupId={poll.groupId}
+              startTime={poll.startTime}
+              nowSec={nowSec}
             />
           ))}
         </div>

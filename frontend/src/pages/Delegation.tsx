@@ -1,10 +1,22 @@
 import { useMemo, useState, useEffect } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
-import { useReadContract, useWriteContract, useWaitForTransactionReceipt, useConnection, useSwitchChain } from 'wagmi';
+import {
+  useReadContract,
+  useWriteContract,
+  useWaitForTransactionReceipt,
+  useConnection,
+  useSwitchChain,
+} from 'wagmi';
 import { veritasCoreAbi, veritasCoreAddress } from '@/lib/veritas';
 import { CHAIN_IDS } from '@/config/contracts';
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/Card';
+import {
+  Card,
+  CardContent,
+  CardHeader,
+  CardTitle,
+  CardDescription,
+} from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
 import { TransactionStatus } from '@/components/TransactionStatus';
@@ -19,15 +31,16 @@ export function Delegation() {
 
   const { address, status, chainId } = useConnection();
   const isConnected = status === 'connected';
+  const isCorrectChain = chainId === CHAIN_IDS.baseSepolia;
 
-  const switchChain = useSwitchChain();
-  const isOnBaseSepolia = chainId === CHAIN_IDS.baseSepolia;
+  const { switchChainAsync } = useSwitchChain();
 
   const queryClient = useQueryClient();
 
   const { id, hasValidPollId } = useMemo(() => {
     try {
-      if (typeof pollId !== 'string' || pollId.length === 0) return { id: 0n, hasValidPollId: false };
+      if (typeof pollId !== 'string' || pollId.length === 0)
+        return { id: 0n, hasValidPollId: false };
       return { id: BigInt(pollId), hasValidPollId: true };
     } catch {
       return { id: 0n, hasValidPollId: false };
@@ -41,6 +54,7 @@ export function Delegation() {
 
   // Read poll to get groupId
   const { data: poll } = useReadContract({
+    chainId: CHAIN_IDS.baseSepolia,
     address: veritasCoreAddress,
     abi: veritasCoreAbi,
     functionName: 'getPoll',
@@ -55,10 +69,13 @@ export function Delegation() {
   }, [poll]);
 
   // Prepare delegate address safely
-  const delegateAddress = isAddress(delegateAddressInput) ? (delegateAddressInput as `0x${string}`) : undefined;
+  const delegateAddress = isAddress(delegateAddressInput)
+    ? (delegateAddressInput as `0x${string}`)
+    : undefined;
 
   // Reads
   const { data: currentDelegate, isLoading: isDelegateLoading } = useReadContract({
+    chainId: CHAIN_IDS.baseSepolia,
     address: veritasCoreAddress,
     abi: veritasCoreAbi,
     functionName: 'delegateOf',
@@ -67,6 +84,7 @@ export function Delegation() {
   });
 
   const { data: delegatorsCount } = useReadContract({
+    chainId: CHAIN_IDS.baseSepolia,
     address: veritasCoreAddress,
     abi: veritasCoreAbi,
     functionName: 'delegatedToCount',
@@ -75,6 +93,7 @@ export function Delegation() {
   });
 
   const { data: hasVoted } = useReadContract({
+    chainId: CHAIN_IDS.baseSepolia,
     address: veritasCoreAddress,
     abi: veritasCoreAbi,
     functionName: 'hasVoted',
@@ -85,19 +104,21 @@ export function Delegation() {
   // AR: Pre-check membership to avoid showing actions that will revert.
   // EN: Pre-check membership to avoid showing actions that will revert.
   const { data: isDelegatorMember, isLoading: isDelegatorMemberLoading } = useReadContract({
+    chainId: CHAIN_IDS.baseSepolia,
     address: veritasCoreAddress,
     abi: veritasCoreAbi,
     functionName: 'isMember',
     args: [pollGroupId ?? 0n, address ?? zeroAddress],
-    query: { enabled: Boolean(pollGroupId) && Boolean(address) },
+    query: { enabled: pollGroupId != null && Boolean(address) },
   });
 
   const { data: isDelegateMember, isLoading: isDelegateMemberLoading } = useReadContract({
+    chainId: CHAIN_IDS.baseSepolia,
     address: veritasCoreAddress,
     abi: veritasCoreAbi,
     functionName: 'isMember',
     args: [pollGroupId ?? 0n, delegateAddress ?? zeroAddress],
-    query: { enabled: Boolean(pollGroupId) && Boolean(delegateAddress) },
+    query: { enabled: pollGroupId != null && Boolean(delegateAddress) },
   });
 
   const delegatorOk = isDelegatorMember === true;
@@ -113,14 +134,18 @@ export function Delegation() {
   const isDelegatePending = delegateWrite.isPending;
   const isRevokePending = revokeWrite.isPending;
 
-  const { isLoading: isDelegateConfirming, isSuccess: isDelegateSuccess } = useWaitForTransactionReceipt({
-    hash: delegateHash,
-    query: { enabled: Boolean(delegateHash) },
-  });
-  const { isLoading: isRevokeConfirming, isSuccess: isRevokeSuccess } = useWaitForTransactionReceipt({
-    hash: revokeHash,
-    query: { enabled: Boolean(revokeHash) },
-  });
+  const { isLoading: isDelegateConfirming, isSuccess: isDelegateSuccess } =
+    useWaitForTransactionReceipt({
+      hash: delegateHash,
+      chainId: CHAIN_IDS.baseSepolia,
+      query: { enabled: Boolean(delegateHash) },
+    });
+  const { isLoading: isRevokeConfirming, isSuccess: isRevokeSuccess } =
+    useWaitForTransactionReceipt({
+      hash: revokeHash,
+      chainId: CHAIN_IDS.baseSepolia,
+      query: { enabled: Boolean(revokeHash) },
+    });
 
   useEffect(() => {
     if (!isDelegateSuccess) return;
@@ -132,7 +157,8 @@ export function Delegation() {
     queryClient.invalidateQueries();
   }, [isRevokeSuccess, queryClient]);
 
-  const isUiLocked = isDelegatePending || isDelegateConfirming || isRevokePending || isRevokeConfirming;
+  const isUiLocked =
+    isDelegatePending || isDelegateConfirming || isRevokePending || isRevokeConfirming;
 
   // Safe derived values for JSX
   const currentDelegateAddr = (currentDelegate as `0x${string}` | undefined) ?? zeroAddress;
@@ -140,13 +166,21 @@ export function Delegation() {
   const hasDelegated = canRead ? currentDelegateAddr !== zeroAddress : false;
   const delegatorCount = canRead && delegatorsCount ? Number(delegatorsCount) : 0;
 
-  const handleDelegate = () => {
-    if (!isConnected) return;
+  const ensureBaseSepolia = async (): Promise<boolean> => {
+    if (isCorrectChain) return true;
 
-    if (!isOnBaseSepolia) {
-      switchChain.mutate({ chainId: CHAIN_IDS.baseSepolia });
-      return;
+    try {
+      await switchChainAsync({ chainId: CHAIN_IDS.baseSepolia });
+      return true;
+    } catch (err) {
+      console.error('Switch chain failed:', err);
+      toast.error('Network switch was cancelled or failed');
+      return false;
     }
+  };
+
+  const handleDelegate = async () => {
+    if (!isConnected) return;
 
     if (!address) {
       toast.error('Connect your wallet first');
@@ -179,7 +213,11 @@ export function Delegation() {
       return;
     }
 
+    const ok = await ensureBaseSepolia();
+    if (!ok) return;
+
     delegateWrite.mutate({
+      chainId: CHAIN_IDS.baseSepolia,
       address: veritasCoreAddress,
       abi: veritasCoreAbi,
       functionName: 'delegate',
@@ -187,13 +225,9 @@ export function Delegation() {
     });
   };
 
-  const handleRevoke = () => {
+  const handleRevoke = async () => {
     if (!isConnected) return;
 
-    if (!isOnBaseSepolia) {
-      switchChain.mutate({ chainId: CHAIN_IDS.baseSepolia });
-      return;
-    }
     if (!hasValidPollId) {
       toast.error('Missing or invalid poll id');
       return;
@@ -204,7 +238,11 @@ export function Delegation() {
       return;
     }
 
+    const ok = await ensureBaseSepolia();
+    if (!ok) return;
+
     revokeWrite.mutate({
+      chainId: CHAIN_IDS.baseSepolia,
       address: veritasCoreAddress,
       abi: veritasCoreAbi,
       functionName: 'revoke',
@@ -278,7 +316,11 @@ export function Delegation() {
             <div>
               <p className="text-sm text-muted-foreground">Delegated To</p>
               <p className="font-mono font-medium">
-                {isConnected ? (hasDelegated ? shortenAddress(currentDelegateAddr) : 'Not delegated') : 'Connect wallet'}
+                {isConnected
+                  ? hasDelegated
+                    ? shortenAddress(currentDelegateAddr)
+                    : 'Not delegated'
+                  : 'Connect wallet'}
               </p>
             </div>
 
@@ -311,8 +353,15 @@ export function Delegation() {
           </div>
 
           <TransactionStatus
-            status={isRevokePending || isRevokeConfirming ? 'pending' : isRevokeSuccess ? 'success' : 'idle'}
+            status={
+              isRevokePending || isRevokeConfirming
+                ? 'pending'
+                : isRevokeSuccess
+                ? 'success'
+                : 'idle'
+            }
             hash={revokeHash}
+            chainId={CHAIN_IDS.baseSepolia}
           />
         </CardContent>
       </Card>
@@ -321,7 +370,9 @@ export function Delegation() {
         <Card>
           <CardHeader>
             <CardTitle>Delegate Your Vote</CardTitle>
-            <CardDescription>Transfer your voting power to another address. They will vote on your behalf.</CardDescription>
+            <CardDescription>
+              Transfer your voting power to another address. They will vote on your behalf.
+            </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="space-y-2">
@@ -331,7 +382,11 @@ export function Delegation() {
                 value={delegateAddressInput}
                 onChange={(e) => setDelegateAddress(e.target.value)}
                 disabled={isUiLocked}
-                error={delegateAddressInput && !isAddress(delegateAddressInput) ? 'Invalid address' : undefined}
+                error={
+                  delegateAddressInput && !isAddress(delegateAddressInput)
+                    ? 'Invalid address'
+                    : undefined
+                }
               />
               <p className="text-xs text-muted-foreground">
                 Enter the Ethereum address you want to delegate your voting power to.
@@ -375,8 +430,15 @@ export function Delegation() {
             </Button>
 
             <TransactionStatus
-              status={isDelegatePending || isDelegateConfirming ? 'pending' : isDelegateSuccess ? 'success' : 'idle'}
+              status={
+                isDelegatePending || isDelegateConfirming
+                  ? 'pending'
+                  : isDelegateSuccess
+                  ? 'success'
+                  : 'idle'
+              }
               hash={delegateHash}
+              chainId={CHAIN_IDS.baseSepolia}
             />
           </CardContent>
         </Card>
