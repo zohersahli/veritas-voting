@@ -1,8 +1,7 @@
 import { Children, isValidElement, useEffect, useMemo, useState } from "react";
 import type { ReactElement, ReactNode } from "react";
 import type { Abi } from "viem";
-import { createPublicClient, http, parseAbiItem, keccak256, toBytes } from "viem";
-import { baseSepolia } from "viem/chains";
+import { parseAbiItem, keccak256, toBytes, zeroAddress } from "viem";
 import { useParams, Link } from "react-router-dom";
 import {
   useReadContract,
@@ -13,14 +12,23 @@ import {
 } from "wagmi";
 
 import { veritasCoreAbi, veritasCoreAddress } from "@/lib/veritas";
+
 import { VERITASCORE_DEPLOY_BLOCK } from "@/config/deploy";
 import { CHAIN_IDS } from "@/config/contracts";
+import { logsClient, fetchChunked } from "@/lib/logsClient";
+
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
 import { Skeleton } from "@/components/LoadingSkeleton";
 import { MemberList } from "@/components/MemberList";
+import { PollCard } from "@/components/PollCard";
 import { Badge } from "@/components/ui/Badge";
 import { Plus } from "lucide-react";
+import { computeStatus } from "@/lib/polls/pollStatus";
+import { useNowSeconds } from "@/hooks/useNowSeconds";
+import { loadPollDetails } from "@/lib/polls/loadPollDetails";
+import type { PollRawItem } from "@/lib/polls/loadPollDetails";
+import { toast } from "@/hooks/useToast";
 
 const TABS = ["info", "members", "polls"] as const;
 type TabKey = (typeof TABS)[number];
@@ -39,7 +47,6 @@ function SimpleTabs({
 }) {
   const [activeTab, setActiveTab] = useState<TabKey>(defaultValue);
 
-  //Sync internal active tab when defaultValue changes after async data loads.
   useEffect(() => {
     setActiveTab(defaultValue);
   }, [defaultValue]);
@@ -96,14 +103,10 @@ const POLL_CREATED_EVENT = parseAbiItem(
   "event PollCreated(uint256 indexed pollId, uint256 indexed groupId, address indexed creator, string title, string cid, uint64 startTime, uint64 endTime, bool quorumEnabled, uint16 quorumBps, uint256 eligibleCountSnapshot)"
 );
 
-const logsClient = createPublicClient({
-  chain: baseSepolia,
-  transport: http("https://sepolia.base.org"),
-});
+const LOG_CHUNK_RANGE = 5_000n;
 
 type Bytes32 = `0x${string}`;
 
-// Convert claim code string to bytes32 using keccak256.
 function claimCodeToHash(code: string): Bytes32 {
   const trimmed = code.trim();
   if (!trimmed) return `0x${"0".repeat(64)}` as Bytes32;
@@ -117,29 +120,19 @@ type ClaimCodeItem = {
 };
 
 function generateClaimCode(length = 12): string {
-  //Simple random one-time claim code generator
-  const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"; // avoid confusing chars (I,O,0,1)
+  const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
   const bytes = new Uint8Array(length);
   window.crypto.getRandomValues(bytes);
 
   let out = "";
-  for (let i = 0; i < length; i++) {
-    out += alphabet[bytes[i] % alphabet.length];
-  }
+  for (let i = 0; i < length; i++) out += alphabet[bytes[i] % alphabet.length];
   return out;
 }
 
-// Keep under provider max range (100k)
-const MAX_BLOCK_RANGE = 99_000n;
-
-type PollCreatedDecodedLog = {
-  args?: { pollId?: bigint };
-  blockNumber?: bigint | null;
-  logIndex?: number | null;
-};
-
 export function GroupDetails() {
   const { groupId } = useParams();
+  const nowSec = useNowSeconds();
+
   const { address, status } = useConnection();
   const isConnected = status === "connected";
 
@@ -147,9 +140,28 @@ export function GroupDetails() {
   const { switchChainAsync } = useSwitchChain();
   const { writeContractAsync } = useWriteContract();
 
+  const isCorrectChain = chainId === CHAIN_IDS.baseSepolia;
+
+  // AR: Centralized safe chain switch to avoid unhandled promise rejections.
+  // EN: Centralized safe chain switch to avoid unhandled promise rejections.
+  const ensureBaseSepolia = async (): Promise<boolean> => {
+    if (isCorrectChain) return true;
+
+    try {
+      await switchChainAsync({ chainId: CHAIN_IDS.baseSepolia });
+      return true;
+    } catch (err) {
+      console.error("switchChainAsync failed:", err);
+      toast.error("Please switch to Base Sepolia in your wallet");
+      return false;
+    }
+  };
+
   const { id, hasValidGroupId } = useMemo(() => {
     try {
-      if (typeof groupId !== "string" || groupId.length === 0) return { id: 0n, hasValidGroupId: false };
+      if (typeof groupId !== "string" || groupId.length === 0) {
+        return { id: 0n, hasValidGroupId: false };
+      }
       return { id: BigInt(groupId), hasValidGroupId: true };
     } catch {
       return { id: 0n, hasValidGroupId: false };
@@ -159,6 +171,7 @@ export function GroupDetails() {
   const extraAbi = veritasCoreAbi as unknown as Abi;
 
   const { data: group, isLoading: isGroupLoading } = useReadContract({
+    chainId: CHAIN_IDS.baseSepolia,
     address: veritasCoreAddress,
     abi: veritasCoreAbi,
     functionName: "groups",
@@ -178,6 +191,7 @@ export function GroupDetails() {
   }, [membershipType]);
 
   const { data: memberCountData } = useReadContract({
+    chainId: CHAIN_IDS.baseSepolia,
     address: veritasCoreAddress,
     abi: extraAbi,
     functionName: "_groupMemberCount",
@@ -186,6 +200,7 @@ export function GroupDetails() {
   });
 
   const { data: nftAddressData } = useReadContract({
+    chainId: CHAIN_IDS.baseSepolia,
     address: veritasCoreAddress,
     abi: extraAbi,
     functionName: "groupNft",
@@ -201,24 +216,24 @@ export function GroupDetails() {
     isLoading: isMemberLoading,
     refetch: refetchIsMember,
   } = useReadContract({
+    chainId: CHAIN_IDS.baseSepolia,
     address: veritasCoreAddress,
     abi: veritasCoreAbi,
     functionName: "isMember",
-    args: [id, (address ?? "0x0000000000000000000000000000000000000000") as `0x${string}`],
+    args: [id, (address ?? zeroAddress) as `0x${string}`],
     query: { enabled: hasValidGroupId && isConnected && !!address },
   });
 
   const isMember = isMemberData === true;
-  const isCorrectChain = chainId === CHAIN_IDS.baseSepolia;
 
   const [claimCode, setClaimCode] = useState("");
   const [claimLoading, setClaimLoading] = useState(false);
   const [claimError, setClaimError] = useState<string | null>(null);
 
   const [copiedCode, setCopiedCode] = useState<string | null>(null);
+  const [copiedHash, setCopiedHash] = useState<string | null>(null);
 
   async function copyToClipboard(text: string): Promise<boolean> {
-    // English: Clipboard API
     try {
       await navigator.clipboard.writeText(text);
       setCopiedCode(text);
@@ -232,27 +247,20 @@ export function GroupDetails() {
   const [ownerCreateLoading, setOwnerCreateLoading] = useState(false);
   const [ownerCreateError, setOwnerCreateError] = useState<string | null>(null);
   const [generatedCodes, setGeneratedCodes] = useState<ClaimCodeItem[]>([]);
-  const [copiedHash, setCopiedHash] = useState<string | null>(null);
   const [batchCount, setBatchCount] = useState(1);
 
-  // Storage key for this group's claim codes
   const storageKey = useMemo(() => `claimCodes_${id.toString()}`, [id]);
 
-  // Load saved codes from localStorage on mount
   useEffect(() => {
     if (!hasValidGroupId) return;
     try {
       const saved = localStorage.getItem(storageKey);
-      if (saved) {
-        const codes = JSON.parse(saved) as ClaimCodeItem[];
-        setGeneratedCodes(codes);
-      }
+      if (saved) setGeneratedCodes(JSON.parse(saved) as ClaimCodeItem[]);
     } catch (e) {
       console.error("Failed to load saved codes:", e);
     }
   }, [storageKey, hasValidGroupId]);
 
-  // Save codes to localStorage whenever they change
   useEffect(() => {
     if (!hasValidGroupId || generatedCodes.length === 0) return;
     try {
@@ -262,17 +270,11 @@ export function GroupDetails() {
     }
   }, [generatedCodes, storageKey, hasValidGroupId]);
 
-  // Download all codes as CSV
   function downloadAllCodesAsCSV() {
     if (generatedCodes.length === 0) return;
 
     const headers = ["Code", "Hash", "Created At"];
-    const rows = generatedCodes.map((c) => [
-      c.code,
-      c.hash,
-      new Date(c.createdAt).toISOString(),
-    ]);
-
+    const rows = generatedCodes.map((c) => [c.code, c.hash, new Date(c.createdAt).toISOString()]);
     const csv = [headers.join(","), ...rows.map((r) => r.join(","))].join("\n");
 
     const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
@@ -286,110 +288,16 @@ export function GroupDetails() {
     URL.revokeObjectURL(url);
   }
 
+  /**
+   * Polls tab data
+   */
   const [pollIds, setPollIds] = useState<bigint[]>([]);
   const [pollIdsLoading, setPollIdsLoading] = useState(false);
   const [pollIdsError, setPollIdsError] = useState<string | null>(null);
 
-  async function handleRegisterWithNft() {
-    // Guard chain before write to prevent wrong-network tx.
-    if (!isConnected || !address) return;
-
-    try {
-      if (!isCorrectChain) {
-        await switchChainAsync({ chainId: CHAIN_IDS.baseSepolia });
-      }
-
-      await writeContractAsync({
-        address: veritasCoreAddress,
-        abi: veritasCoreAbi,
-        functionName: "registerWithNft",
-        args: [id],
-      });
-
-      await refetchIsMember();
-    } catch (e) {
-      console.error("registerWithNft failed:", e);
-    }
-  }
-
-  async function handleClaimWithCode() {
-    if (!isConnected || !address) return;
-
-    try {
-      setClaimLoading(true);
-      setClaimError(null);
-
-      if (!isCorrectChain) {
-        await switchChainAsync({ chainId: CHAIN_IDS.baseSepolia });
-      }
-
-      const codeHash = claimCodeToHash(claimCode);
-
-      await writeContractAsync({
-        address: veritasCoreAddress,
-        abi: veritasCoreAbi,
-        functionName: "claimWithCode",
-        args: [id, codeHash],
-      });
-
-      await refetchIsMember();
-      setClaimCode("");
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-      console.error("claimWithCode failed:", e);
-      setClaimError(msg);
-    } finally {
-      setClaimLoading(false);
-    }
-  }
-
-  async function handleOwnerCreateClaimCode() {
-    // Owner-only action for ClaimCode groups
-    if (!isConnected || !address) return;
-    if (!isOwner) return;
-    if (membershipTypeFinal !== 2) return;
-    if (batchCount < 1 || batchCount > 1000) {
-      setOwnerCreateError("Batch count must be between 1 and 1000");
-      return;
-    }
-
-    try {
-      setOwnerCreateLoading(true);
-      setOwnerCreateError(null);
-
-      if (!isCorrectChain) {
-        await switchChainAsync({ chainId: CHAIN_IDS.baseSepolia });
-      }
-
-      // Generate codes locally (off-chain)
-      const newCodes: ClaimCodeItem[] = [];
-      for (let i = 0; i < batchCount; i++) {
-        const code = generateClaimCode(12);
-        const hash = claimCodeToHash(code);
-        newCodes.push({ code, hash, createdAt: Date.now() });
-      }
-
-      // Upload hashes to blockchain (one transaction per hash)
-      // Note: This might take time for large batches
-      for (const { hash } of newCodes) {
-        await writeContractAsync({
-          address: veritasCoreAddress,
-          abi: veritasCoreAbi,
-          functionName: "createClaimCode",
-          args: [id, hash],
-        });
-      }
-
-      // Add all codes to state (localStorage will be updated via useEffect)
-      setGeneratedCodes((prev) => [...newCodes, ...prev]);
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-      console.error("createClaimCode failed:", e);
-      setOwnerCreateError(msg);
-    } finally {
-      setOwnerCreateLoading(false);
-    }
-  }
+  const [pollRaw, setPollRaw] = useState<PollRawItem[]>([]);
+  const [pollDetailsLoading, setPollDetailsLoading] = useState(false);
+  const [pollDetailsError, setPollDetailsError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!hasValidGroupId) return;
@@ -399,41 +307,35 @@ export function GroupDetails() {
     (async () => {
       setPollIdsLoading(true);
       setPollIdsError(null);
+      setPollIds([]);
+      setPollRaw([]);
+      setPollDetailsError(null);
 
       try {
-        const latestBlock = await logsClient.getBlockNumber();
+        const latestBlock = await logsClient.getBlockNumber({ cacheTime: 0 });
 
-        const allLogs: Awaited<ReturnType<typeof logsClient.getLogs>> = [];
-        let fromBlock = VERITASCORE_DEPLOY_BLOCK;
-
-        while (fromBlock <= latestBlock) {
-          if (cancelled) break;
-
-          let toBlock = fromBlock + MAX_BLOCK_RANGE - 1n;
-          if (toBlock > latestBlock) toBlock = latestBlock;
-
-          const chunk = await logsClient.getLogs({
-            address: veritasCoreAddress,
-            event: POLL_CREATED_EVENT,
-            args: { groupId: id },
-            fromBlock,
-            toBlock,
-          });
-
-          allLogs.push(...chunk);
-          fromBlock = toBlock + 1n;
-        }
+        const allLogs = await fetchChunked(
+          VERITASCORE_DEPLOY_BLOCK,
+          latestBlock,
+          LOG_CHUNK_RANGE,
+          (fb, tb) =>
+            logsClient.getLogs({
+              address: veritasCoreAddress,
+              event: POLL_CREATED_EVENT,
+              args: { groupId: id },
+              fromBlock: fb,
+              toBlock: tb,
+            })
+        );
 
         const sortedLogs = [...allLogs].sort((a, b) => {
           const ab = a.blockNumber ?? 0n;
           const bb = b.blockNumber ?? 0n;
-
           if (ab < bb) return -1;
           if (ab > bb) return 1;
 
           const ai = BigInt(a.logIndex ?? 0);
           const bi = BigInt(b.logIndex ?? 0);
-
           if (ai < bi) return -1;
           if (ai > bi) return 1;
           return 0;
@@ -443,7 +345,7 @@ export function GroupDetails() {
         const orderedIds: bigint[] = [];
 
         for (const l of sortedLogs) {
-          const pid = (l as unknown as PollCreatedDecodedLog).args?.pollId;
+          const pid = (l as unknown as { args?: { pollId?: bigint } }).args?.pollId;
           if (pid === undefined || typeof pid !== "bigint") continue;
 
           const key = pid.toString();
@@ -467,6 +369,55 @@ export function GroupDetails() {
       cancelled = true;
     };
   }, [hasValidGroupId, id]);
+
+  useEffect(() => {
+    if (!hasValidGroupId) return;
+
+    let cancelled = false;
+
+    (async () => {
+      if (pollIds.length === 0) {
+        setPollRaw([]);
+        return;
+      }
+
+      setPollDetailsLoading(true);
+      setPollDetailsError(null);
+
+      try {
+        const viewer = (address ?? zeroAddress) as `0x${string}`;
+        const details = await loadPollDetails({
+          publicClient: logsClient,
+          pollIds,
+          viewer,
+          pollBatchSize: 50,
+        });
+        if (!cancelled) setPollRaw(details);
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        console.error("Failed to fetch poll details:", e);
+        if (!cancelled) setPollDetailsError(msg);
+      } finally {
+        if (!cancelled) setPollDetailsLoading(false);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [hasValidGroupId, pollIds, address]);
+
+  const groupPolls = useMemo(() => {
+    return pollRaw.map((p) => ({
+      id: p.id,
+      title: p.title,
+      startTime: p.startTime,
+      status: computeStatus(nowSec, p.startTime, p.endTime, p.finalized),
+      endTime: p.endTime,
+      hasVoted: p.hasVoted,
+      voteCount: Number(p.totalVotes),
+    }));
+  }, [pollRaw, nowSec]);
 
   if (!hasValidGroupId) return <div>Missing or invalid group id</div>;
 
@@ -493,6 +444,123 @@ export function GroupDetails() {
       : membershipTypeFinal === 2
       ? "Claim Code"
       : "Unknown";
+
+  async function handleRegisterWithNft() {
+    if (!isConnected || !address) {
+      toast.error("Connect your wallet first");
+      return;
+    }
+
+    const ok = await ensureBaseSepolia();
+    if (!ok) return;
+
+    try {
+      await writeContractAsync({
+        chainId: CHAIN_IDS.baseSepolia,
+        address: veritasCoreAddress,
+        abi: veritasCoreAbi,
+        functionName: "registerWithNft",
+        args: [id],
+      });
+
+      await refetchIsMember();
+      toast.success("Registered successfully");
+    } catch (e) {
+      console.error("registerWithNft failed:", e);
+      toast.error("Transaction failed");
+    }
+  }
+
+  async function handleClaimWithCode() {
+    if (!isConnected || !address) {
+      toast.error("Connect your wallet first");
+      return;
+    }
+
+    setClaimLoading(true);
+    setClaimError(null);
+
+    const ok = await ensureBaseSepolia();
+    if (!ok) {
+      setClaimLoading(false);
+      return;
+    }
+
+    try {
+      const codeHash = claimCodeToHash(claimCode);
+
+      await writeContractAsync({
+        chainId: CHAIN_IDS.baseSepolia,
+        address: veritasCoreAddress,
+        abi: veritasCoreAbi,
+        functionName: "claimWithCode",
+        args: [id, codeHash],
+      });
+
+      await refetchIsMember();
+      setClaimCode("");
+      toast.success("Claim successful");
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      console.error("claimWithCode failed:", e);
+      setClaimError(msg);
+      toast.error("Claim failed");
+    } finally {
+      setClaimLoading(false);
+    }
+  }
+
+  async function handleOwnerCreateClaimCode() {
+    if (!isConnected || !address) {
+      toast.error("Connect your wallet first");
+      return;
+    }
+    if (!isOwner) return;
+    if (membershipTypeFinal !== 2) return;
+
+    if (batchCount < 1 || batchCount > 1000) {
+      setOwnerCreateError("Batch count must be between 1 and 1000");
+      return;
+    }
+
+    const ok = await ensureBaseSepolia();
+    if (!ok) return;
+
+    try {
+      setOwnerCreateLoading(true);
+      setOwnerCreateError(null);
+
+      const newCodes: ClaimCodeItem[] = [];
+      for (let i = 0; i < batchCount; i++) {
+        const code = generateClaimCode(12);
+        const hash = claimCodeToHash(code);
+        newCodes.push({ code, hash, createdAt: Date.now() });
+      }
+
+      for (const { hash } of newCodes) {
+        await writeContractAsync({
+          chainId: CHAIN_IDS.baseSepolia,
+          address: veritasCoreAddress,
+          abi: veritasCoreAbi,
+          functionName: "createClaimCode",
+          args: [id, hash],
+        });
+      }
+
+      setGeneratedCodes((prev) => [...newCodes, ...prev]);
+      toast.success("Codes created");
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      console.error("createClaimCode failed:", e);
+      setOwnerCreateError(msg);
+      toast.error("Failed to create codes");
+    } finally {
+      setOwnerCreateLoading(false);
+    }
+  }
+
+  const pollsLoading = pollIdsLoading || pollDetailsLoading;
+  const pollsError = pollIdsError ?? pollDetailsError;
 
   return (
     <div className="space-y-8">
@@ -605,14 +673,13 @@ export function GroupDetails() {
                           value={batchCount}
                           onChange={(e) => {
                             const val = parseInt(e.target.value, 10);
-                            if (!isNaN(val) && val >= 1 && val <= 1000) {
-                              setBatchCount(val);
-                            }
+                            if (!isNaN(val) && val >= 1 && val <= 1000) setBatchCount(val);
                           }}
                           className="w-full h-10 rounded-md border bg-background px-3 text-sm"
                           disabled={ownerCreateLoading}
                         />
                       </div>
+
                       <Button
                         type="button"
                         variant="neon"
@@ -652,10 +719,7 @@ export function GroupDetails() {
                         </div>
 
                         {generatedCodes.slice(0, 5).map((c) => (
-                          <div
-                            key={c.hash}
-                            className="rounded-md border bg-background/40 p-3 space-y-2"
-                          >
+                          <div key={c.hash} className="rounded-md border bg-background/40 p-3 space-y-2">
                             <div className="flex items-center justify-between gap-2">
                               <div className="text-sm">
                                 <span className="text-muted-foreground">Code:</span>{" "}
@@ -666,8 +730,8 @@ export function GroupDetails() {
                                 variant="ghost"
                                 size="sm"
                                 onClick={async () => {
-                                  const ok = await copyToClipboard(c.code);
-                                  setCopiedCode(ok ? c.code : null);
+                                  const ok2 = await copyToClipboard(c.code);
+                                  setCopiedCode(ok2 ? c.code : null);
                                   setTimeout(() => setCopiedCode(null), 1200);
                                 }}
                               >
@@ -685,8 +749,8 @@ export function GroupDetails() {
                                 variant="ghost"
                                 size="sm"
                                 onClick={async () => {
-                                  const ok = await copyToClipboard(c.hash);
-                                  setCopiedHash(ok ? c.hash : null);
+                                  const ok2 = await copyToClipboard(c.hash);
+                                  setCopiedHash(ok2 ? c.hash : null);
                                   setTimeout(() => setCopiedHash(null), 1200);
                                 }}
                               >
@@ -743,37 +807,36 @@ export function GroupDetails() {
               <h3 className="text-lg font-semibold">Polls in this Group</h3>
             </div>
 
-            {pollIdsError ? (
+            {pollsError ? (
               <div className="p-4 rounded-md border border-destructive/40 text-sm text-destructive">
-                Failed to load polls: {pollIdsError}
+                Failed to load polls: {pollsError}
               </div>
             ) : null}
 
-            {pollIdsLoading ? (
-              <div className="space-y-2">
-                <Skeleton className="h-14 w-full" />
-                <Skeleton className="h-14 w-full" />
-                <Skeleton className="h-14 w-full" />
+            {pollsLoading ? (
+              <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
+                <Skeleton className="h-28 w-full" />
+                <Skeleton className="h-28 w-full" />
+                <Skeleton className="h-28 w-full" />
               </div>
-            ) : pollIds.length === 0 ? (
+            ) : groupPolls.length === 0 ? (
               <div className="text-center py-12 border border-dashed rounded-lg text-muted-foreground">
                 No polls found for this group yet.
               </div>
             ) : (
-              <div className="space-y-2">
-                {pollIds.map((pid) => (
-                  <Card key={pid.toString()}>
-                    <CardContent className="py-4 flex items-center justify-between">
-                      <div className="space-y-1">
-                        <div className="text-sm font-medium">Poll ID: {pid.toString()}</div>
-                        <div className="text-xs text-muted-foreground">From PollCreated logs</div>
-                      </div>
-
-                      <Button asChild variant="ghost">
-                        <Link to={`/polls/${pid.toString()}`}>Open</Link>
-                      </Button>
-                    </CardContent>
-                  </Card>
+              <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
+                {groupPolls.map((poll) => (
+                  <PollCard
+                    key={poll.id.toString()}
+                    id={poll.id}
+                    title={poll.title}
+                    status={poll.status}
+                    endTime={poll.endTime}
+                    hasVoted={poll.hasVoted}
+                    voteCount={poll.voteCount}
+                    startTime={poll.startTime}
+                    nowSec={nowSec}
+                  />
                 ))}
               </div>
             )}

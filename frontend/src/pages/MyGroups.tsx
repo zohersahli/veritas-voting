@@ -11,6 +11,7 @@ import { CardSkeleton } from "@/components/LoadingSkeleton";
 import { Plus, Search, Users, UserCheck } from "lucide-react";
 import { useDebounce } from "@/hooks/useDebounce";
 import { CHAIN_IDS } from "@/config/contracts";
+import { zeroAddress } from "viem";
 
 type GroupTuple = readonly [
   bigint, // id
@@ -22,7 +23,7 @@ type GroupTuple = readonly [
 ];
 
 type UiGroup = {
-  id: string; // groupId as string
+  id: string;
   name: string;
   description: string;
   memberCount: number;
@@ -37,7 +38,7 @@ type ExtraReadContract = {
   address: `0x${string}`;
   abi: Abi;
   functionName: string;
-  args: readonly [bigint];
+  args: readonly unknown[];
 };
 
 type MyGroupsNavState = {
@@ -54,14 +55,13 @@ export function MyGroups() {
   const [searchQuery, setSearchQuery] = useState("");
   const debouncedSearch = useDebounce(searchQuery, 300);
 
-  const { address, status } = useConnection();
+  const { address, status, chainId } = useConnection();
   const isConnected = status === "connected" && Boolean(address);
+  const isOnBaseSepolia = chainId === CHAIN_IDS.baseSepolia;
 
   const navState = location.state as MyGroupsNavState | null;
   const hintedNextGroupId = useMemo(() => {
-    // If CreateGroup navigated here, it passes createdGroupId. We use it as a minimum list bound.
     if (!navState?.createdGroupId) return null;
-
     try {
       const id = BigInt(navState.createdGroupId);
       return id + 1n;
@@ -136,7 +136,6 @@ export function MyGroups() {
       if (!result) continue;
 
       const [id, owner, membershipType, name, description] = result;
-
       if (!name || name.trim().length === 0) continue;
 
       out.push({
@@ -152,6 +151,7 @@ export function MyGroups() {
   }, [groupsData]);
 
   const extraAbi = veritasCoreAbi as unknown as Abi;
+  const viewer = (address ?? zeroAddress) as `0x${string}`;
 
   const metaContracts = useMemo((): ExtraReadContract[] => {
     if (baseGroups.length === 0) return [];
@@ -171,18 +171,28 @@ export function MyGroups() {
         chainId: CHAIN_IDS.baseSepolia,
         address: veritasCoreAddress,
         abi: extraAbi,
-        functionName: "_groupMemberCount",
+        functionName: "getGroupMemberCount",
         args: [g.groupId],
+      });
+
+      contracts.push({
+        chainId: CHAIN_IDS.baseSepolia,
+        address: veritasCoreAddress,
+        abi: extraAbi,
+        functionName: "isMember",
+        args: [g.groupId, viewer],
       });
     }
 
     return contracts;
-  }, [baseGroups, extraAbi]);
+  }, [baseGroups, extraAbi, viewer]);
 
   const { data: metaData, isLoading: isMetaLoading } = useReadContracts({
     contracts: metaContracts,
     query: {
-      enabled: metaContracts.length > 0,
+      // Reads specify chainId explicitly (Base Sepolia), so they can run even if the wallet is on a different chain.
+      // Gate only on having contracts + a connected viewer address (for isMember).
+      enabled: metaContracts.length > 0 && Boolean(address),
       staleTime: 0,
       refetchOnMount: "always",
       refetchOnWindowFocus: "always",
@@ -192,14 +202,16 @@ export function MyGroups() {
   const metaByGroupId = useMemo(() => {
     const nftById = new Map<string, `0x${string}` | undefined>();
     const countById = new Map<string, bigint>();
+    const isMemberById = new Map<string, boolean>();
 
-    if (!metaData || metaData.length === 0) return { nftById, countById };
+    if (!metaData || metaData.length === 0) return { nftById, countById, isMemberById };
 
-    for (let i = 0; i < metaData.length; i += 2) {
+    for (let i = 0; i < metaData.length; i += 3) {
       const nftItem = metaData[i];
       const cntItem = metaData[i + 1];
+      const memItem = metaData[i + 2];
 
-      const groupIndex = Math.floor(i / 2);
+      const groupIndex = Math.floor(i / 3);
       const g = baseGroups[groupIndex];
       if (!g) continue;
 
@@ -212,9 +224,12 @@ export function MyGroups() {
       const cnt = cntItem?.result;
       if (typeof cnt === "bigint") countById.set(gid, cnt);
       else countById.set(gid, 0n);
+
+      const mem = memItem?.result;
+      isMemberById.set(gid, Boolean(mem));
     }
 
-    return { nftById, countById };
+    return { nftById, countById, isMemberById };
   }, [metaData, baseGroups]);
 
   const allGroups: UiGroup[] = useMemo(() => {
@@ -224,18 +239,24 @@ export function MyGroups() {
 
     for (const g of baseGroups) {
       const gid = g.groupId.toString();
-      const memberCountBig = metaByGroupId.countById.get(gid) ?? 0n;
+      const memberCountExclOwner = metaByGroupId.countById.get(gid) ?? 0n;
       const nftAddress = metaByGroupId.nftById.get(gid);
+
+      const ownerLower = g.owner.toLowerCase();
+      const viewerLower = (address ?? "").toLowerCase();
+      const owned = Boolean(address) && ownerLower === viewerLower;
+
+      const memberFlag = owned ? true : (metaByGroupId.isMemberById.get(gid) ?? false);
 
       out.push({
         id: gid,
         name: g.name,
         description: g.description,
         membershipType: g.membershipType,
-        memberCount: Number(memberCountBig),
+        memberCount: Number(memberCountExclOwner) + 1,
         owner: g.owner,
         nftAddress,
-        isMember: Boolean(address && g.owner.toLowerCase() === address.toLowerCase()),
+        isMember: memberFlag,
       });
     }
 
@@ -243,23 +264,23 @@ export function MyGroups() {
   }, [baseGroups, metaByGroupId, address]);
 
   const displayGroups = useMemo(() => {
-    if (!address) return activeTab === "owned" ? [] : allGroups;
+    if (!address) return activeTab === "owned" ? [] : [];
 
-    const isOwner = (g: UiGroup) => g.owner.toLowerCase() === address.toLowerCase();
-    return activeTab === "owned" ? allGroups.filter(isOwner) : allGroups.filter((g) => !isOwner(g));
+    const isOwnerFn = (g: UiGroup) => g.owner.toLowerCase() === address.toLowerCase();
+
+    if (activeTab === "owned") return allGroups.filter(isOwnerFn);
+
+    return allGroups.filter((g) => g.isMember && !isOwnerFn(g));
   }, [activeTab, allGroups, address]);
 
   const filteredGroups = useMemo(() => {
     const q = debouncedSearch.trim().toLowerCase();
     if (!q) return displayGroups;
-    
-    // Check if search is numeric (potential ID)
+
     const isNumeric = /^\d+$/.test(q);
-    
+
     return displayGroups.filter((g) => {
-      // Exact ID match (case-insensitive comparison)
       if (isNumeric && g.id === q) return true;
-      // Name or description search (existing logic)
       return g.name.toLowerCase().includes(q) || g.description.toLowerCase().includes(q);
     });
   }, [displayGroups, debouncedSearch]);
@@ -272,8 +293,9 @@ export function MyGroups() {
   }, [allGroups, address]);
 
   const memberCount = useMemo(() => {
-    if (!address) return allGroups.length;
-    return allGroups.filter((g) => g.owner.toLowerCase() !== address.toLowerCase()).length;
+    if (!address) return 0;
+    const viewerLower = address.toLowerCase();
+    return allGroups.filter((g) => g.isMember && g.owner.toLowerCase() !== viewerLower).length;
   }, [allGroups, address]);
 
   return (
@@ -282,6 +304,11 @@ export function MyGroups() {
         <div>
           <h1 className="text-3xl font-bold">My Groups</h1>
           <p className="text-muted-foreground">Manage your groups and memberships</p>
+          {isConnected && !isOnBaseSepolia ? (
+            <p className="text-xs text-yellow-500 mt-1">
+              You are on the wrong network. Switch to Base Sepolia to load groups.
+            </p>
+          ) : null}
         </div>
 
         {isConnected ? (
@@ -358,8 +385,8 @@ export function MyGroups() {
           icon={activeTab === "owned" ? Users : UserCheck}
           title={`No ${activeTab} groups found`}
           description={
-            !address && activeTab === "owned"
-              ? "Connect your wallet to view groups you own"
+            !address
+              ? "Connect your wallet to view your groups"
               : searchQuery
               ? "Try adjusting your search query"
               : activeTab === "owned"
@@ -369,22 +396,6 @@ export function MyGroups() {
           actionLabel={activeTab === "owned" && isConnected ? "Create Group" : undefined}
           onAction={activeTab === "owned" && isConnected ? () => navigate("/groups/create") : undefined}
         />
-      )}
-
-      {!isLoading && totalGroups > 0 && (
-        <div className="bg-primary/5 border border-primary/20 rounded-lg p-6">
-          <h3 className="font-semibold mb-2">About Groups</h3>
-          <ul className="space-y-2 text-sm text-muted-foreground">
-            <li>
-              • <strong>Owned:</strong> Groups you created and manage
-            </li>
-            <li>
-              • <strong>Member:</strong> Currently shows groups you do not own (membership detection can be added next)
-            </li>
-            <li>• Group owners can create polls and manage members</li>
-            <li>• Members can vote in polls created for the group</li>
-          </ul>
-        </div>
       )}
     </div>
   );

@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
+// H:\veritas\frontend\src\pages\PollDetails.tsx
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import {
   useConnection,
@@ -6,8 +7,15 @@ import {
   useReadContracts,
   useWriteContract,
   useWaitForTransactionReceipt,
+  useSwitchChain,
 } from "wagmi";
-import { zeroAddress } from "viem";
+import {
+  zeroAddress,
+  decodeEventLog,
+  keccak256,
+  encodeAbiParameters,
+  parseAbiParameters,
+} from "viem";
 
 import { veritasCoreAbi, veritasCoreAddress, PollStatus } from "@/lib/veritas";
 import { CHAIN_IDS } from "@/config/contracts";
@@ -19,6 +27,9 @@ import { VoteChart } from "@/components/VoteChart";
 import { Skeleton } from "@/components/LoadingSkeleton";
 import { TransactionStatus } from "@/components/TransactionStatus";
 import { formatDate } from "@/utils/format";
+import { useNowSeconds } from "@/hooks/useNowSeconds";
+import { toast } from "@/hooks/useToast";
+import { computeStatus } from "@/lib/polls/pollStatus";
 
 type PollView = {
   id: bigint;
@@ -36,26 +47,139 @@ type PollView = {
 
 type ResultsView = {
   finalized: boolean;
-  status: number;
+  status: bigint; // bigint from viem
   winningOption: bigint;
   totalVotes: bigint;
 };
 
+type EscrowView = {
+  exists: boolean;
+  sent: boolean;
+  creator: `0x${string}`;
+  groupId: bigint;
+  deposited: bigint;
+  reservedMaxFee: bigint;
+  reservedPlatform: bigint;
+};
+
 const EMPTY_OPTIONS: readonly string[] = [];
 
-// Updates "now" every second to match on-chain time checks.
-function useNowSeconds(): number {
-  const [now, setNow] = useState(() => Math.floor(Date.now() / 1000));
+/**
+ * AR: بعض قراءات wagmi ترجع struct كـ tuple (array) وليس object.
+ * EN: Some wagmi reads return structs as tuples (arrays), not objects.
+ */
+type ResultsTuple = readonly [boolean, bigint | number, bigint | number, bigint | number];
 
-  useEffect(() => {
-    const id = window.setInterval(() => {
-      setNow(Math.floor(Date.now() / 1000));
-    }, 1000);
+// AR: Match contract ceil quorum math
+// EN: Match contract ceil quorum math
+function requiredVotesCeil(eligible: bigint, quorumBps: bigint): bigint {
+  const DENOM = 10_000n;
+  if (eligible === 0n || quorumBps === 0n) return 0n;
+  return (eligible * quorumBps + (DENOM - 1n)) / DENOM;
+}
+type EscrowTuple = readonly [
+  boolean,
+  boolean,
+  `0x${string}`,
+  bigint,
+  bigint,
+  bigint,
+  bigint
+];
 
-    return () => window.clearInterval(id);
-  }, []);
+function isObject(x: unknown): x is Record<string, unknown> {
+  return typeof x === "object" && x !== null;
+}
 
-  return now;
+// Add this helper near isObject()
+function toBigIntSafe(x: unknown, fallback: bigint = 0n): bigint {
+  if (typeof x === "bigint") return x;
+  if (typeof x === "number") return BigInt(x);
+  if (typeof x === "string") {
+    try {
+      return BigInt(x);
+    } catch {
+      return fallback;
+    }
+  }
+  return fallback;
+}
+
+function asResultsView(x: unknown): ResultsView | undefined {
+  if (!x) return undefined;
+
+  // Tuple: [finalized, status, winningOption, totalVotes]
+  if (Array.isArray(x)) {
+    const t = x as unknown as ResultsTuple;
+    return {
+      finalized: Boolean(t[0]),
+      status: toBigIntSafe(t[1]),
+      winningOption: toBigIntSafe(t[2]),
+      totalVotes: toBigIntSafe(t[3]),
+    };
+  }
+
+  // Object fallback
+  if (isObject(x)) {
+    const finalized = x["finalized"];
+    const status = x["status"];
+    const winningOption = x["winningOption"];
+    const totalVotes = x["totalVotes"];
+
+    if (typeof finalized === "boolean") {
+      return {
+        finalized,
+        status: toBigIntSafe(status),
+        winningOption: toBigIntSafe(winningOption),
+        totalVotes: toBigIntSafe(totalVotes),
+      };
+    }
+  }
+
+  return undefined;
+}
+
+function asEscrowView(x: unknown): EscrowView | undefined {
+  if (!x) return undefined;
+
+  // Tuple: [exists, sent, creator, groupId, deposited, reservedMaxFee, reservedPlatform]
+  if (Array.isArray(x)) {
+    const t = x as unknown as EscrowTuple;
+    return {
+      exists: Boolean(t[0]),
+      sent: Boolean(t[1]),
+      creator: t[2],
+      groupId: t[3],
+      deposited: t[4],
+      reservedMaxFee: t[5],
+      reservedPlatform: t[6],
+    };
+  }
+
+  // Object fallback
+  if (isObject(x)) {
+    const exists = x["exists"];
+    const sent = x["sent"];
+    const creator = x["creator"];
+    const groupId = x["groupId"];
+    const deposited = x["deposited"];
+    const reservedMaxFee = x["reservedMaxFee"];
+    const reservedPlatform = x["reservedPlatform"];
+
+    if (typeof exists === "boolean" && typeof sent === "boolean") {
+      return {
+        exists,
+        sent,
+        creator: (typeof creator === "string" ? creator : zeroAddress) as `0x${string}`,
+        groupId: typeof groupId === "bigint" ? groupId : 0n,
+        deposited: typeof deposited === "bigint" ? deposited : 0n,
+        reservedMaxFee: typeof reservedMaxFee === "bigint" ? reservedMaxFee : 0n,
+        reservedPlatform: typeof reservedPlatform === "bigint" ? reservedPlatform : 0n,
+      };
+    }
+  }
+
+  return undefined;
 }
 
 export function PollDetails() {
@@ -74,8 +198,9 @@ export function PollDetails() {
   const { address, status, chainId } = useConnection();
   const isConnected = status === "connected";
   const isCorrectChain = chainId === CHAIN_IDS.baseSepolia;
+  const { switchChainAsync } = useSwitchChain();
 
-  const voter = ((address ?? zeroAddress) as `0x${string}`);
+  const voter = (address ?? zeroAddress) as `0x${string}`;
   const [selectedOption, setSelectedOption] = useState<number | null>(null);
   const [l1MessageId, setL1MessageId] = useState<`0x${string}` | null>(null);
 
@@ -110,7 +235,7 @@ export function PollDetails() {
   });
 
   const poll = base.data?.[0]?.result as unknown as PollView | undefined;
-  const res = base.data?.[1]?.result as unknown as ResultsView | undefined;
+  const res = asResultsView(base.data?.[1]?.result);
   const hasVoted = Boolean((base.data?.[2]?.result as boolean | undefined) ?? false);
 
   const pollGroupId = poll?.groupId;
@@ -118,14 +243,86 @@ export function PollDetails() {
   // AR: Pre-check membership to avoid showing actions that will revert.
   // EN: Pre-check membership to avoid showing actions that will revert.
   const { data: isMemberData, isLoading: isMemberLoading } = useReadContract({
+    chainId: CHAIN_IDS.baseSepolia,
     address: veritasCoreAddress,
     abi: veritasCoreAbi,
     functionName: "isMember",
     args: [pollGroupId ?? 0n, address ?? zeroAddress],
-    query: { enabled: Boolean(pollGroupId) && Boolean(address) },
+    query: { enabled: pollGroupId != null && Boolean(address) },
   });
 
   const isMember = isMemberData === true;
+
+  // Escrow read
+  const escrow = useReadContract({
+    chainId: CHAIN_IDS.baseSepolia,
+    address: veritasCoreAddress,
+    abi: veritasCoreAbi,
+    functionName: "escrows",
+    args: [id],
+    query: { enabled: hasValidPollId },
+  });
+
+  const escrowData = asEscrowView(escrow.data);
+
+  // Paused state read (for Send-to-L1 UX guard)
+  const { data: isPaused } = useReadContract({
+    chainId: CHAIN_IDS.baseSepolia,
+    address: veritasCoreAddress,
+    abi: veritasCoreAbi,
+    functionName: "paused",
+    query: { enabled: hasValidPollId },
+  });
+
+  // AR: Treat paused as "not safe" unless it's explicitly false.
+  // EN: Treat paused as "not safe" unless it's explicitly false.
+  const isNotPaused = isPaused === false;
+
+  // Owner read (Ownable)
+  const ownerRead = useReadContract({
+    chainId: CHAIN_IDS.baseSepolia,
+    address: veritasCoreAddress,
+    abi: veritasCoreAbi,
+    functionName: "owner",
+    query: { enabled: hasValidPollId },
+  });
+
+  // Role checks
+  const normalizedAddress = (address ?? zeroAddress).toLowerCase();
+  const ownerAddr = ((ownerRead.data as `0x${string}` | undefined) ?? zeroAddress).toLowerCase();
+  const creatorAddr = ((escrowData?.creator ?? zeroAddress) as `0x${string}`).toLowerCase();
+
+  const isOwner =
+    normalizedAddress !== zeroAddress.toLowerCase() && normalizedAddress === ownerAddr;
+
+  const isCreator =
+    normalizedAddress !== zeroAddress.toLowerCase() && normalizedAddress === creatorAddr;
+
+  // ackKey = keccak256(abi.encode(groupId, pollId))
+  const groupIdForAck = (escrowData?.groupId ?? poll?.groupId ?? 0n) as bigint;
+
+  const ackKey = useMemo(() => {
+    // AR: Do not compute a fake key. Wait until groupId is known.
+    // EN: Do not compute a fake key. Wait until groupId is known.
+    if (!hasValidPollId) return null;
+    if (groupIdForAck === 0n) return null;
+
+    return keccak256(
+      encodeAbiParameters(parseAbiParameters("uint256, uint256"), [groupIdForAck, id])
+    ) as `0x${string}`;
+  }, [hasValidPollId, groupIdForAck, id]);
+
+  const ackRead = useReadContract({
+    chainId: CHAIN_IDS.baseSepolia,
+    address: veritasCoreAddress,
+    abi: veritasCoreAbi,
+    functionName: "ackReceived",
+    args: ackKey ? [ackKey] : undefined,
+    query: { enabled: Boolean(ackKey) },
+  });
+
+  const ackLoading = ackRead.isLoading;
+  const ackReceived = ackRead.data === true;
 
   const options: readonly string[] = poll?.options ?? EMPTY_OPTIONS;
   const optionsLength = options.length;
@@ -153,15 +350,29 @@ export function PollDetails() {
   const votePending = voteWrite.isPending;
   const voteSuccess = voteWrite.isSuccess;
 
+  const voteReceipt = useWaitForTransactionReceipt({
+    hash: voteHash,
+    chainId: CHAIN_IDS.baseSepolia,
+    query: { enabled: Boolean(voteHash) },
+  });
+
+  // Refetch data after successful vote
+  useEffect(() => {
+    if (voteReceipt.isSuccess) {
+      void base.refetch();
+      void votes.refetch();
+    }
+  }, [voteReceipt.isSuccess, base, votes]);
+
   // 4) Write: Finalize
   const finalizeWrite = useWriteContract();
   const finalizeHash = finalizeWrite.data;
   const finalizePending = finalizeWrite.isPending;
-  const finalizeSuccess = finalizeWrite.isSuccess;
 
   const finalizeReceipt = useWaitForTransactionReceipt({
     hash: finalizeHash,
     chainId: CHAIN_IDS.baseSepolia,
+    query: { enabled: Boolean(finalizeHash) },
   });
 
   // Refetch data after successful finalization
@@ -169,27 +380,108 @@ export function PollDetails() {
     if (finalizeReceipt.isSuccess) {
       void base.refetch();
       void votes.refetch();
+      void escrow.refetch();
+      void ackRead.refetch();
     }
-  }, [finalizeReceipt.isSuccess, base, votes]);
-
-  // Temporary: Log results after finalize confirmation
-  useEffect(() => {
-    if (finalizeReceipt.isSuccess) {
-      console.log("RESULTS AFTER FINALIZE:", res);
-    }
-  }, [finalizeReceipt.isSuccess, res]);
+  }, [finalizeReceipt.isSuccess, base, votes, escrow, ackRead]);
 
   // 5) Write: Send to L1
   const sendWrite = useWriteContract();
   const sendHash = sendWrite.data;
   const sendPending = sendWrite.isPending;
-  const sendSuccess = sendWrite.isSuccess;
 
+  const sendReceipt = useWaitForTransactionReceipt({
+    hash: sendHash,
+    chainId: CHAIN_IDS.baseSepolia,
+    query: { enabled: Boolean(sendHash) },
+  });
+
+  // 5b) Write: Withdraw Leftover (Creator)
+  const withdrawWrite = useWriteContract();
+  const withdrawHash = withdrawWrite.data;
+  const withdrawPending = withdrawWrite.isPending;
+
+  const withdrawReceipt = useWaitForTransactionReceipt({
+    hash: withdrawHash,
+    chainId: CHAIN_IDS.baseSepolia,
+    query: { enabled: Boolean(withdrawHash) },
+  });
+
+  // 5c) Write: Claim Platform Fee (Owner)
+  const claimWrite = useWriteContract();
+  const claimHash = claimWrite.data;
+  const claimPending = claimWrite.isPending;
+
+  const claimReceipt = useWaitForTransactionReceipt({
+    hash: claimHash,
+    chainId: CHAIN_IDS.baseSepolia,
+    query: { enabled: Boolean(claimHash) },
+  });
+
+  // Extract messageId from ResultSentToL1 event after send success
   useEffect(() => {
-    if (sendWrite.isSuccess && typeof sendWrite.data === "string") {
-      setL1MessageId(sendWrite.data as `0x${string}`);
+    if (!sendReceipt.isSuccess || !sendReceipt.data) return;
+
+    const receipt = sendReceipt.data;
+    const coreAddr = veritasCoreAddress.toLowerCase();
+
+    for (const log of receipt.logs) {
+      if (log.address.toLowerCase() !== coreAddr) continue;
+
+      try {
+        const decoded = decodeEventLog({
+          abi: veritasCoreAbi,
+          data: log.data,
+          topics: log.topics,
+        });
+
+        if (decoded.eventName === "ResultSentToL1") {
+          const args = decoded.args as { messageId?: `0x${string}` | bigint };
+          if (args.messageId) {
+            let msgId: `0x${string}`;
+            if (typeof args.messageId === "bigint") {
+              const hexStr = args.messageId.toString(16).padStart(64, "0");
+              msgId = `0x${hexStr}` as `0x${string}`;
+            } else {
+              msgId = args.messageId as `0x${string}`;
+            }
+            setL1MessageId(msgId);
+            break;
+          }
+        }
+      } catch {
+        // Ignore logs that don't decode with our ABI
+      }
     }
-  }, [sendWrite.isSuccess, sendWrite.data]);
+  }, [sendReceipt.isSuccess, sendReceipt.data]);
+
+  // Refetch data after successful send
+  useEffect(() => {
+    if (sendReceipt.isSuccess) {
+      void base.refetch();
+      void votes.refetch();
+      void escrow.refetch();
+      void ackRead.refetch();
+    }
+  }, [sendReceipt.isSuccess, base, votes, escrow, ackRead]);
+
+  // Refetch after successful withdraw
+  useEffect(() => {
+    if (withdrawReceipt.isSuccess) {
+      void base.refetch();
+      void escrow.refetch();
+      void ackRead.refetch();
+    }
+  }, [withdrawReceipt.isSuccess, base, escrow, ackRead]);
+
+  // Refetch after successful claim
+  useEffect(() => {
+    if (claimReceipt.isSuccess) {
+      void base.refetch();
+      void escrow.refetch();
+      void ackRead.refetch();
+    }
+  }, [claimReceipt.isSuccess, base, escrow, ackRead]);
 
   // 6) Chart
   const chart = useMemo(() => {
@@ -206,7 +498,7 @@ export function PollDetails() {
   }, [options, optionsLength, votes.data]);
 
   const statusLabel =
-    res?.status === 1 ? "Passed" : res?.status === 2 ? "Failed Quorum" : "Unknown";
+    res?.status === 1n ? "Passed" : res?.status === 2n ? "Failed Quorum" : "Unknown";
 
   const winningIndex = res?.winningOption != null ? Number(res.winningOption) : null;
 
@@ -215,22 +507,173 @@ export function PollDetails() {
       ? options[winningIndex]
       : "N/A";
 
+  // Quorum calculation
+  const quorumEnabled = poll?.quorum?.enabled ?? false;
+  const quorumBps = poll?.quorum?.quorumBps ?? 0n;
+  const eligibleCountSnapshot = poll?.eligibleCountSnapshot ?? 0n;
+  const quorumRequired = quorumEnabled
+    ? Number(requiredVotesCeil(eligibleCountSnapshot, BigInt(quorumBps)))
+    : 0;
+  const quorumMet = quorumEnabled
+    ? Number(res?.totalVotes ?? 0n) >= quorumRequired
+    : true;
+
+  // Compute before debug + before early returns (safe fallbacks)
+  const computedStatus = computeStatus(
+    now,
+    poll?.startTime ?? 0n,
+    poll?.endTime ?? 0n,
+    res?.finalized ?? false
+  );
+
+  const canSendToL1 =
+    isConnected &&
+    isCorrectChain &&
+    isNotPaused &&
+    res?.finalized === true &&
+    res?.status !== 0n &&
+    escrowData?.exists === true &&
+    escrowData?.sent === false &&
+    (escrowData?.deposited ?? 0n) > 0n &&
+    !sendPending;
+
+  // Withdraw + Claim guards
+  const deposited = escrowData?.deposited ?? 0n;
+  const reservedPlatform = escrowData?.reservedPlatform ?? 0n;
+
+  // AR: Prevent underflow. Only allow if deposited > reservedPlatform.
+  // EN: Prevent underflow. Only allow if deposited > reservedPlatform.
+  const hasWithdrawable = deposited > reservedPlatform;
+
+  const canWithdrawLeftover =
+    isConnected &&
+    isCorrectChain &&
+    isNotPaused &&
+    escrowData?.exists === true &&
+    escrowData?.sent === true &&
+    isCreator &&
+    hasWithdrawable &&
+    !withdrawPending;
+
+  const canClaimPlatformFee =
+    isConnected &&
+    isCorrectChain &&
+    isNotPaused &&
+    escrowData?.exists === true &&
+    escrowData?.sent === true &&
+    isOwner &&
+    res?.status === 1n &&
+    ackReceived === true &&
+    reservedPlatform > 0n &&
+    !claimPending;
+
+  // AR: Debug Claim guard values (temporary).
+  // EN: Debug Claim guard values (temporary).
+  const lastClaimGuardRef = useRef<string>("");
+
+  useEffect(() => {
+    if (!hasValidPollId) return;
+    if (base.isLoading) return;
+
+    const payload = {
+      address,
+      owner: ownerRead.data,
+      isOwner,
+      chainId,
+      isCorrectChain,
+      isPaused,
+      isNotPaused,
+      pollStatus: res?.status,
+      escrowExists: escrowData?.exists,
+      escrowSent: escrowData?.sent,
+      groupIdForAck: groupIdForAck?.toString(),
+      ackKey,
+      ackReceived,
+      reservedPlatform: reservedPlatform?.toString(),
+      canClaimPlatformFee,
+      // AR: Additional checks to identify which condition breaks activation.
+      // EN: Additional checks to identify which condition breaks activation.
+      status,
+      isConnected,
+      claimPending,
+      typeofResStatus: typeof res?.status,
+      typeofReservedPlatform: typeof reservedPlatform,
+    };
+
+    const key = JSON.stringify(payload, (_k, v) => (typeof v === "bigint" ? v.toString() : v));
+    if (key === lastClaimGuardRef.current) return;
+
+    lastClaimGuardRef.current = key;
+    console.log("CLAIM_GUARD", payload);
+  }, [
+    hasValidPollId,
+    base.isLoading,
+    address,
+    ownerRead.data,
+    isOwner,
+    chainId,
+    isCorrectChain,
+    isPaused,
+    isNotPaused,
+    res?.status,
+    escrowData?.exists,
+    escrowData?.sent,
+    groupIdForAck,
+    ackKey,
+    ackReceived,
+    reservedPlatform,
+    canClaimPlatformFee,
+    status,
+    isConnected,
+    claimPending,
+  ]);
+
+  // AR: Debug Send guard values (temporary).
+  // EN: Debug Send guard values (temporary).
+  const lastSendGuardRef = useRef<string>("");
+  useEffect(() => {
+    if (!hasValidPollId) return;
+    if (base.isLoading) return;
+
+    const payload = {
+      isConnected,
+      chainId,
+      isCorrectChain,
+      sendPending,
+      isPaused,
+      finalized: res?.finalized,
+      status: res?.status,
+      escrowExists: escrowData?.exists,
+      escrowSent: escrowData?.sent,
+      deposited: escrowData?.deposited,
+      canSendToL1,
+    };
+
+    const key = JSON.stringify(payload, (_k, v) => (typeof v === "bigint" ? v.toString() : v));
+    if (key === lastSendGuardRef.current) return;
+
+    lastSendGuardRef.current = key;
+    console.log("SEND_GUARD", payload);
+  }, [
+    hasValidPollId,
+    base.isLoading,
+    isConnected,
+    chainId,
+    isCorrectChain,
+    sendPending,
+    isPaused,
+    res?.finalized,
+    res?.status,
+    escrowData?.exists,
+    escrowData?.sent,
+    escrowData?.deposited,
+    canSendToL1,
+  ]);
+
   // Guards after hooks
   if (!hasValidPollId) return <div>Missing poll id</div>;
   if (base.isLoading) return <Skeleton className="h-96 w-full" />;
   if (!poll) return <div>Poll not found</div>;
-
-  const start = Number(poll.startTime);
-  const end = Number(poll.endTime);
-
-  const computedStatus =
-    res?.finalized
-      ? PollStatus.Finalized
-      : now < start
-      ? PollStatus.Upcoming
-      : now < end
-      ? PollStatus.Active
-      : PollStatus.Ended;
 
   const canVote =
     isConnected &&
@@ -249,16 +692,24 @@ export function PollDetails() {
     isCorrectChain &&
     computedStatus === PollStatus.Ended &&
     res?.finalized !== true &&
+    optionsLength > 0 &&
     !finalizePending;
 
-  const canSendToL1 =
-    isConnected &&
-    isCorrectChain &&
-    res?.finalized === true &&
-    !sendPending;
-
-  const handleVote = () => {
+  const handleVote = async () => {
     if (!canVote || selectedOption === null) return;
+    if (!isConnected) return;
+
+    if (!isCorrectChain) {
+      try {
+        await switchChainAsync({ chainId: CHAIN_IDS.baseSepolia });
+      } catch (err) {
+        console.error("Failed to switch chain:", err);
+        toast.error(
+          "Network switch was rejected or failed. Please switch to Base Sepolia manually."
+        );
+        return;
+      }
+    }
 
     voteWrite.mutate({
       chainId: CHAIN_IDS.baseSepolia,
@@ -269,8 +720,21 @@ export function PollDetails() {
     });
   };
 
-  const handleFinalize = () => {
+  const handleFinalize = async () => {
     if (!canFinalize) return;
+    if (!isConnected) return;
+
+    if (!isCorrectChain) {
+      try {
+        await switchChainAsync({ chainId: CHAIN_IDS.baseSepolia });
+      } catch (err) {
+        console.error("Failed to switch chain:", err);
+        toast.error(
+          "Network switch was rejected or failed. Please switch to Base Sepolia manually."
+        );
+        return;
+      }
+    }
 
     finalizeWrite.mutate({
       chainId: CHAIN_IDS.baseSepolia,
@@ -281,14 +745,77 @@ export function PollDetails() {
     });
   };
 
-  const handleSendToL1 = () => {
+  const handleSendToL1 = async () => {
     if (!canSendToL1) return;
+    if (!isConnected) return;
+
+    if (!isCorrectChain) {
+      try {
+        await switchChainAsync({ chainId: CHAIN_IDS.baseSepolia });
+      } catch (err) {
+        console.error("Failed to switch chain:", err);
+        toast.error(
+          "Network switch was rejected or failed. Please switch to Base Sepolia manually."
+        );
+        return;
+      }
+    }
 
     sendWrite.mutate({
       chainId: CHAIN_IDS.baseSepolia,
       address: veritasCoreAddress,
       abi: veritasCoreAbi,
       functionName: "sendResultToL1",
+      args: [id],
+    });
+  };
+
+  const handleWithdrawLeftover = async () => {
+    if (!canWithdrawLeftover) return;
+    if (!isConnected) return;
+
+    if (!isCorrectChain) {
+      try {
+        await switchChainAsync({ chainId: CHAIN_IDS.baseSepolia });
+      } catch (err) {
+        console.error("Failed to switch chain:", err);
+        toast.error(
+          "Network switch was rejected or failed. Please switch to Base Sepolia manually."
+        );
+        return;
+      }
+    }
+
+    withdrawWrite.mutate({
+      chainId: CHAIN_IDS.baseSepolia,
+      address: veritasCoreAddress,
+      abi: veritasCoreAbi,
+      functionName: "withdrawLeftover",
+      args: [id],
+    });
+  };
+
+  const handleClaimPlatformFee = async () => {
+    if (!canClaimPlatformFee) return;
+    if (!isConnected) return;
+
+    if (!isCorrectChain) {
+      try {
+        await switchChainAsync({ chainId: CHAIN_IDS.baseSepolia });
+      } catch (err) {
+        console.error("Failed to switch chain:", err);
+        toast.error(
+          "Network switch was rejected or failed. Please switch to Base Sepolia manually."
+        );
+        return;
+      }
+    }
+
+    claimWrite.mutate({
+      chainId: CHAIN_IDS.baseSepolia,
+      address: veritasCoreAddress,
+      abi: veritasCoreAbi,
+      functionName: "claimPlatformFee",
       args: [id],
     });
   };
@@ -322,10 +849,62 @@ export function PollDetails() {
             variant="neon"
             disabled={!canSendToL1}
             onClick={handleSendToL1}
-            title={!isCorrectChain ? "Switch to Base Sepolia" : undefined}
+            title={
+              !isCorrectChain
+                ? "Switch to Base Sepolia"
+                : !isNotPaused
+                ? "Contract is paused"
+                : undefined
+            }
           >
             {sendPending ? "Sending..." : "Send to L1"}
           </Button>
+
+          {isCreator ? (
+            <Button
+              variant="outline"
+              disabled={!canWithdrawLeftover}
+              onClick={handleWithdrawLeftover}
+              title={
+                !isCorrectChain
+                  ? "Switch to Base Sepolia"
+                  : !isNotPaused
+                  ? "Contract is paused"
+                  : escrowData?.sent !== true
+                  ? "Send to L1 first"
+                  : !hasWithdrawable
+                  ? "No leftover available"
+                  : undefined
+              }
+            >
+              {withdrawPending ? "Withdrawing..." : "Withdraw Leftover"}
+            </Button>
+          ) : null}
+
+          {isOwner ? (
+            <Button
+              variant="outline"
+              disabled={!canClaimPlatformFee}
+              onClick={handleClaimPlatformFee}
+              title={
+                !isCorrectChain
+                  ? "Switch to Base Sepolia"
+                  : !isNotPaused
+                  ? "Contract is paused"
+                  : res?.status !== 1n
+                  ? "Poll must be Passed"
+                  : ackKey == null || ackLoading
+                  ? "Loading ACK..."
+                  : ackReceived !== true
+                  ? "Waiting for ACK"
+                  : reservedPlatform <= 0n
+                  ? "No platform fee reserved"
+                  : undefined
+              }
+            >
+              {claimPending ? "Claiming..." : "Claim Platform Fee"}
+            </Button>
+          ) : null}
 
           <Button asChild variant="outline">
             <Link to={`/results/l1/${poll.groupId.toString()}/${id.toString()}`}>
@@ -346,6 +925,74 @@ export function PollDetails() {
           <div className="text-sm text-green-500">
             Sent to L1. MessageId: <span className="font-mono">{l1MessageId}</span>
           </div>
+        ) : null}
+
+        {finalizeHash ? (
+          <TransactionStatus
+            status={
+              finalizeReceipt.isLoading || finalizePending
+                ? "pending"
+                : finalizeReceipt.isSuccess
+                ? "success"
+                : finalizeReceipt.isError || Boolean(finalizeWrite.error)
+                ? "error"
+                : "idle"
+            }
+            hash={finalizeHash}
+            error={(finalizeWrite.error ?? (finalizeReceipt.error as Error | null)) ?? undefined}
+            chainId={CHAIN_IDS.baseSepolia}
+          />
+        ) : null}
+
+        {sendHash ? (
+          <TransactionStatus
+            status={
+              sendReceipt.isLoading || sendPending
+                ? "pending"
+                : sendReceipt.isSuccess
+                ? "success"
+                : sendReceipt.isError || Boolean(sendWrite.error)
+                ? "error"
+                : "idle"
+            }
+            hash={sendHash}
+            error={(sendWrite.error ?? (sendReceipt.error as Error | null)) ?? undefined}
+            chainId={CHAIN_IDS.baseSepolia}
+          />
+        ) : null}
+
+        {withdrawHash ? (
+          <TransactionStatus
+            status={
+              withdrawReceipt.isLoading || withdrawPending
+                ? "pending"
+                : withdrawReceipt.isSuccess
+                ? "success"
+                : withdrawReceipt.isError || Boolean(withdrawWrite.error)
+                ? "error"
+                : "idle"
+            }
+            hash={withdrawHash}
+            error={(withdrawWrite.error ?? (withdrawReceipt.error as Error | null)) ?? undefined}
+            chainId={CHAIN_IDS.baseSepolia}
+          />
+        ) : null}
+
+        {claimHash ? (
+          <TransactionStatus
+            status={
+              claimReceipt.isLoading || claimPending
+                ? "pending"
+                : claimReceipt.isSuccess
+                ? "success"
+                : claimReceipt.isError || Boolean(claimWrite.error)
+                ? "error"
+                : "idle"
+            }
+            hash={claimHash}
+            error={(claimWrite.error ?? (claimReceipt.error as Error | null)) ?? undefined}
+            chainId={CHAIN_IDS.baseSepolia}
+          />
         ) : null}
       </div>
 
@@ -408,16 +1055,7 @@ export function PollDetails() {
                   <TransactionStatus
                     status={votePending ? "pending" : voteSuccess ? "success" : "idle"}
                     hash={voteHash}
-                  />
-
-                  <TransactionStatus
-                    status={finalizePending ? "pending" : finalizeSuccess ? "success" : "idle"}
-                    hash={finalizeHash}
-                  />
-
-                  <TransactionStatus
-                    status={sendPending ? "pending" : sendSuccess ? "success" : "idle"}
-                    hash={sendHash}
+                    chainId={CHAIN_IDS.baseSepolia}
                   />
                 </div>
               )}
@@ -433,7 +1071,11 @@ export function PollDetails() {
             <CardContent className="space-y-2 text-sm">
               <div className="flex justify-between">
                 <span className="text-muted-foreground">Finalized</span>
-                <span className={res?.finalized ? "text-green-500 font-medium" : "text-muted-foreground"}>
+                <span
+                  className={
+                    res?.finalized ? "text-green-500 font-medium" : "text-muted-foreground"
+                  }
+                >
                   {res?.finalized ? "Yes" : "No"}
                 </span>
               </div>
@@ -450,8 +1092,39 @@ export function PollDetails() {
 
               <div className="flex justify-between">
                 <span className="text-muted-foreground">Total Votes</span>
-                <span className="font-medium">{res?.totalVotes != null ? Number(res.totalVotes) : 0}</span>
+                <span className="font-medium">
+                  {res?.totalVotes != null ? Number(res.totalVotes) : 0}
+                </span>
               </div>
+
+              {quorumEnabled ? (
+                <>
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Quorum</span>
+                    <span
+                      className={
+                        quorumMet ? "text-green-500 font-medium" : "text-red-500 font-medium"
+                      }
+                    >
+                      {quorumMet ? "Met" : "Not Met"}
+                    </span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Required Votes</span>
+                    <span className="font-medium">{quorumRequired}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Eligible Voters</span>
+                    <span className="font-medium">{Number(eligibleCountSnapshot)}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Quorum</span>
+                    <span className="font-medium">
+                      {(Number(quorumBps) / 100).toFixed(2)}%
+                    </span>
+                  </div>
+                </>
+              ) : null}
             </CardContent>
           </Card>
 
