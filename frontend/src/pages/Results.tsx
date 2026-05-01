@@ -1,9 +1,17 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo } from "react";
 import { Link, useParams } from "react-router-dom";
-import { useConnection, useReadContracts, useWriteContract } from "wagmi";
+import {
+  useConnection,
+  useReadContract,
+  useReadContracts,
+  useSwitchChain,
+  useWaitForTransactionReceipt,
+  useWriteContract,
+} from "wagmi";
 
 import { veritasCoreAbi, veritasCoreAddress, PollStatus } from "@/lib/veritas";
 import { CHAIN_IDS } from "@/config/contracts";
+import { toast } from "@/hooks/useToast";
 
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
@@ -13,6 +21,7 @@ import { Skeleton } from "@/components/LoadingSkeleton";
 import { TransactionStatus } from "@/components/TransactionStatus";
 import { ArrowLeft, Trophy } from "lucide-react";
 import { formatDate } from "@/utils/format";
+import { useNowSeconds } from "@/hooks/useNowSeconds";
 
 type PollView = {
   id: bigint;
@@ -50,22 +59,17 @@ type ResultsView = {
   totalVotes: bigint;
 };
 
+type EscrowView = {
+  exists: boolean;
+  sent: boolean;
+  creator: `0x${string}`;
+  groupId: bigint;
+  deposited: bigint;
+  reservedMaxFee: bigint;
+  reservedPlatform: bigint;
+};
+
 const EMPTY_OPTIONS: readonly string[] = [];
-
-// Updates "now" every second to match on-chain time checks.
-function useNowSeconds(): number {
-  const [now, setNow] = useState(() => Math.floor(Date.now() / 1000));
-
-  useEffect(() => {
-    const id = window.setInterval(() => {
-      setNow(Math.floor(Date.now() / 1000));
-    }, 1000);
-
-    return () => window.clearInterval(id);
-  }, []);
-
-  return now;
-}
 
 // AR: Match contract ceil quorum math
 // EN: Match contract ceil quorum math
@@ -90,9 +94,10 @@ export function Results() {
   const { isConnected, chainId } = useConnection();
   const isCorrectChain = chainId === CHAIN_IDS.baseSepolia;
 
+  const { switchChainAsync } = useSwitchChain();
   const now = useNowSeconds();
 
-  // 1) Base reads (hook always called, request gated by enabled)
+  // 1) Base reads
   const base = useReadContracts({
     contracts: [
       {
@@ -130,17 +135,14 @@ export function Results() {
   const poll = base.data?.[0]?.result as unknown as PollView | undefined;
   const pollMeta = base.data?.[1]?.result as unknown as PollMetaView | undefined;
 
-  // IMPORTANT: don't use truthy check because 0n is falsy
-  const optionsLength =
-    base.data?.[2]?.result != null ? Number(base.data[2].result) : 0;
-
+  const optionsLength = base.data?.[2]?.result != null ? Number(base.data[2].result) : 0;
   const res = base.data?.[3]?.result as unknown as ResultsView | undefined;
 
   // Prefer poll.options if present, otherwise fallback to getOption
   const pollOptions = poll?.options ?? (EMPTY_OPTIONS as readonly string[]);
   const shouldFetchOptions = !poll || pollOptions.length === 0;
 
-  // 2) Options reads (hook always called, request gated by enabled)
+  // 2) Options reads
   const optionContracts = useMemo(() => {
     if (!shouldFetchOptions || optionsLength === 0) return [];
     return Array.from({ length: optionsLength }).map((_, i) => ({
@@ -169,7 +171,7 @@ export function Results() {
     });
   }, [shouldFetchOptions, pollOptions, optionsLength, optionsRead.data]);
 
-  // 3) Votes reads (hook always called, request gated by enabled)
+  // 3) Votes reads
   const voteContracts = useMemo(() => {
     if (optionsLength === 0) return [];
     return Array.from({ length: optionsLength }).map((_, i) => ({
@@ -186,25 +188,79 @@ export function Results() {
     query: { enabled: hasValidPollId && optionsLength > 0 },
   });
 
-  // 4) Write hook (wagmi v3: mutation object)
-  const write = useWriteContract();
-  const txHash = write.data;
-  const isPending = write.isPending;
-  const isSuccess = write.isSuccess;
+  // 3.5) Escrow read
+  const escrow = useReadContract({
+    chainId: CHAIN_IDS.baseSepolia,
+    address: veritasCoreAddress,
+    abi: veritasCoreAbi,
+    functionName: "escrows",
+    args: [id],
+    query: { enabled: hasValidPollId },
+  });
 
-  // 5) Derived view-model (useMemo before early returns)
+  const escrowData = escrow.data as EscrowView | undefined;
+
+  // Paused state read (for Send-to-L1 UX guard)
+  const { data: isPaused } = useReadContract({
+    chainId: CHAIN_IDS.baseSepolia,
+    address: veritasCoreAddress,
+    abi: veritasCoreAbi,
+    functionName: "paused",
+    query: { enabled: hasValidPollId },
+  });
+
+  // 4) Write hook
+  // Separate write hooks to avoid receipt tracking races between actions.
+  const finalizeWrite = useWriteContract();
+  const sendWrite = useWriteContract();
+
+  const finalizeHash = finalizeWrite.data;
+  const sendHash = sendWrite.data;
+
+  const isFinalizing = finalizeWrite.isPending;
+  const isSending = sendWrite.isPending;
+  const isPending = isFinalizing || isSending;
+
+  const finalizeReceipt = useWaitForTransactionReceipt({
+    hash: finalizeHash,
+    chainId: CHAIN_IDS.baseSepolia,
+    query: { enabled: Boolean(finalizeHash) },
+  });
+
+  const sendReceipt = useWaitForTransactionReceipt({
+    hash: sendHash,
+    chainId: CHAIN_IDS.baseSepolia,
+    query: { enabled: Boolean(sendHash) },
+  });
+
+  useEffect(() => {
+    if (finalizeReceipt.isSuccess) {
+      void base.refetch();
+      void votes.refetch();
+      void escrow.refetch();
+    }
+  }, [finalizeReceipt.isSuccess, base, votes, escrow]);
+
+  useEffect(() => {
+    if (sendReceipt.isSuccess) {
+      void base.refetch();
+      void escrow.refetch();
+      void votes.refetch();
+    }
+  }, [sendReceipt.isSuccess, base, escrow, votes]);
+
+  // 5) Derived view-model
   const view = useMemo(() => {
     const start = poll ? Number(poll.startTime) : 0;
     const end = poll ? Number(poll.endTime) : 0;
 
-    const status =
-      res?.finalized
-        ? PollStatus.Finalized
-        : now < start
-        ? PollStatus.Upcoming
-        : now <= end
-        ? PollStatus.Active
-        : PollStatus.Ended;
+    const status = res?.finalized
+      ? PollStatus.Finalized
+      : now < start
+      ? PollStatus.Upcoming
+      : now < end
+      ? PollStatus.Active
+      : PollStatus.Ended;
 
     const chartOptions = labels.map((label, i) => {
       const raw = votes.data?.[i]?.result;
@@ -229,13 +285,10 @@ export function Results() {
     const quorumBps = Number(pollMeta?.quorumBps ?? poll?.quorum?.quorumBps ?? 0);
     const eligibleCountSnapshot = pollMeta?.eligibleCountSnapshot ?? poll?.eligibleCountSnapshot ?? 0n;
 
-    const quorumRequired = quorumEnabled
-      ? Number(requiredVotesCeil(eligibleCountSnapshot, BigInt(quorumBps)))
-      : 0;
+    const quorumRequired = quorumEnabled ? Number(requiredVotesCeil(eligibleCountSnapshot, BigInt(quorumBps))) : 0;
     const quorumMet = quorumEnabled ? totalVotes >= quorumRequired : true;
 
     const isFinalized = Boolean(res?.finalized);
-    const canSendToL1 = status === PollStatus.Ended && !isFinalized && quorumMet;
 
     return {
       status,
@@ -248,22 +301,51 @@ export function Results() {
       quorumRequired,
       quorumMet,
       isFinalized,
-      canSendToL1,
     };
   }, [labels, votes.data, poll, pollMeta, res, now]);
 
-  // Safe render guards AFTER all hooks
   if (!hasValidPollId) return <div>Missing poll id</div>;
   if (base.isLoading) return <Skeleton className="h-96 w-full" />;
   if (!poll) return <div>Poll not found</div>;
 
-  const canWrite = isConnected && isCorrectChain && !isPending;
+  const optionsCount = optionsLength;
 
-  const handleSendToL1 = () => {
-    if (!canWrite) return;
-    if (!view.canSendToL1) return;
+  // This should represent "user can attempt writes now"
+  const canWriteNow = isConnected && !isPending;
 
-    write.mutate({
+  // View remains data-oriented
+  // UI guards are computed outside useMemo for full parity with PollDetails.tsx
+  const canFinalizeUi =
+    canWriteNow &&
+    isCorrectChain &&
+    view.status === PollStatus.Ended &&
+    view.isFinalized !== true &&
+    optionsCount > 0;
+
+  const canSendToL1Ui =
+    canWriteNow &&
+    isCorrectChain &&
+    view.isFinalized === true &&
+    res?.status !== 0 && // Result status must not be Unknown (enum value 0)
+    escrowData?.exists === true &&
+    escrowData?.sent === false &&
+    (escrowData?.deposited ?? 0n) > 0n && // Minimum escrow balance check
+    !isPaused; // Contract must not be paused
+
+  const handleSendToL1 = async () => {
+    if (!canSendToL1Ui) return;
+
+    if (!isCorrectChain) {
+      try {
+        await switchChainAsync({ chainId: CHAIN_IDS.baseSepolia });
+      } catch (err) {
+        console.error("Failed to switch chain:", err);
+        toast.error("تم رفض تبديل الشبكة أو فشل. يرجى التبديل إلى Base Sepolia يدوياً.");
+        return;
+      }
+    }
+
+    sendWrite.mutate({
       chainId: CHAIN_IDS.baseSepolia,
       address: veritasCoreAddress,
       abi: veritasCoreAbi,
@@ -272,11 +354,20 @@ export function Results() {
     });
   };
 
-  const handleFinalizeOnL2 = () => {
-    if (!canWrite) return;
-    if (view.isFinalized) return;
+  const handleFinalizeOnL2 = async () => {
+    if (!canFinalizeUi) return;
 
-    write.mutate({
+    if (!isCorrectChain) {
+      try {
+        await switchChainAsync({ chainId: CHAIN_IDS.baseSepolia });
+      } catch (err) {
+        console.error("Failed to switch chain:", err);
+        toast.error("تم رفض تبديل الشبكة أو فشل. يرجى التبديل إلى Base Sepolia يدوياً.");
+        return;
+      }
+    }
+
+    finalizeWrite.mutate({
       chainId: CHAIN_IDS.baseSepolia,
       address: veritasCoreAddress,
       abi: veritasCoreAbi,
@@ -285,9 +376,10 @@ export function Results() {
     });
   };
 
-  const sendDisabled = !view.canSendToL1 || !canWrite;
-  const finalizeDisabled = view.isFinalized || !canWrite;
-
+  const finalizeDisabled = !canFinalizeUi;
+  const sendDisabled = !canSendToL1Ui;
+  const txHash = sendHash ?? finalizeHash;
+  const isSuccess = sendWrite.isSuccess || finalizeWrite.isSuccess;
   return (
     <div className="max-w-4xl mx-auto space-y-8">
       <div className="flex items-center gap-4">
@@ -307,6 +399,7 @@ export function Results() {
       </div>
 
       <Card>
+        
         <CardHeader>
           <CardTitle>Results</CardTitle>
         </CardHeader>
@@ -334,19 +427,25 @@ export function Results() {
           {!isConnected ? (
             <div className="text-sm text-muted-foreground">Connect your wallet to send or finalize results.</div>
           ) : !isCorrectChain ? (
-            <div className="text-sm text-muted-foreground">Wrong network. Switch to Base Sepolia.</div>
+            <div className="text-sm text-muted-foreground">Wrong network. Switching will be requested when you click an action.</div>
           ) : null}
 
           <div className="flex flex-col gap-3">
             <Button variant="neon" disabled={sendDisabled} onClick={handleSendToL1}>
-              {isPending ? "Sending..." : "Send result to L1"}
+              {isSending ? "Sending..." : "Send result to L1"}
             </Button>
 
             <Button variant="outline" disabled={finalizeDisabled} onClick={handleFinalizeOnL2}>
-              {isPending ? "Finalizing..." : "Finalize on L2"}
+              {isFinalizing ? "Finalizing..." : "Finalize on L2"}
             </Button>
 
-            <TransactionStatus status={isPending ? "pending" : isSuccess ? "success" : "idle"} hash={txHash} />
+            {txHash ? (
+              <TransactionStatus
+                status={isPending ? "pending" : isSuccess ? "success" : "idle"}
+                hash={txHash}
+                chainId={CHAIN_IDS.baseSepolia}
+              />
+            ) : null}
           </div>
         </CardContent>
       </Card>

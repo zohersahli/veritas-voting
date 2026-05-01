@@ -47,7 +47,7 @@ export function GroupCard({
             <Users className="h-4 w-4" />
             <span>{memberCount} members</span>
           </div>
-          <Badge variant="secondary" className="text-xs">
+          <Badge variant="secondary" className="text-xs text-white">
             {getMembershipLabel(membershipType)}
           </Badge>
           <Badge variant="outline" className="text-xs">
