@@ -18,6 +18,7 @@ import { TransactionStatus } from "@/components/TransactionStatus";
 import { Plus, Trash2, ArrowRight, Check, Loader2 } from "lucide-react";
 import { parseEther, formatEther, zeroAddress } from "viem";
 import { generateCidFromDescription } from "@/lib/ipfs";
+import { toast } from "@/hooks/useToast";
 
 // ERC20 ABI for LINK approval
 const erc20Abi = [
@@ -62,19 +63,21 @@ export function CreatePoll() {
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const [options, setOptions] = useState(["Yes", "No"]);
-  const [duration, setDuration] = useState(3); // days
-  const [useQuorum] = useState(false);
-  const [quorumBps] = useState(1000); // 10%
+  const [durationValue, setDurationValue] = useState(3);
+  const [durationUnit, setDurationUnit] = useState<"minutes" | "hours" | "days">("days");
+  const [useQuorum, setUseQuorum] = useState(false);
+  const [quorumPercent, setQuorumPercent] = useState(10); // 10% (stored as percentage 0-100)
   const [cid, setCid] = useState<string>("");
   const [isGeneratingCid, setIsGeneratingCid] = useState(false);
 
   const START_TIME_BUFFER_SECONDS = 120;
+  const MAX_DURATION_DAYS = 30; // keep same upper cap as before (30 days), but allow minutes/hours
 
   const { address, status, chainId } = useConnection();
   const isConnected = status === "connected";
   const connectedAddress = (isConnected ? address : zeroAddress) as `0x${string}`;
 
-  const switchChain = useSwitchChain();
+  const { switchChainAsync } = useSwitchChain();
   const isOnBaseSepolia = chainId === CHAIN_IDS.baseSepolia;
 
   const queryClient = useQueryClient();
@@ -91,6 +94,7 @@ export function CreatePoll() {
 
   // Read group to enforce "only owner can create polls"
   const { data: groupData, isLoading: isGroupLoading } = useReadContract({
+    chainId: CHAIN_IDS.baseSepolia,
     address: veritasCoreAddress,
     abi: veritasCoreAbi,
     functionName: "groups",
@@ -108,6 +112,18 @@ export function CreatePoll() {
     if (!isConnected || !address || !groupOwner) return false;
     return address.toLowerCase() === groupOwner.toLowerCase();
   }, [isConnected, address, groupOwner]);
+
+  // Read eligible count for quorum (includes owner)
+  const { data: eligibleCountData } = useReadContract({
+    chainId: CHAIN_IDS.baseSepolia,
+    address: veritasCoreAddress,
+    abi: veritasCoreAbi,
+    functionName: "getEligibleCountForQuorum",
+    args: [groupIdBn ?? 0n],
+    query: { enabled: Boolean(groupIdBn) && useQuorum },
+  });
+
+  const eligibleCount = eligibleCountData != null ? BigInt(eligibleCountData) : null;
 
   // Generate CID from description when description changes (avoid race)
   useEffect(() => {
@@ -140,6 +156,7 @@ export function CreatePoll() {
 
   // Fees
   const { data: opsFeeFlat } = useReadContract({
+    chainId: CHAIN_IDS.baseSepolia,
     address: veritasCoreAddress,
     abi: veritasCoreAbi,
     functionName: "opsFeeFlat",
@@ -154,6 +171,7 @@ export function CreatePoll() {
 
   // Check current allowance (only relevant for group owner)
   const { data: currentAllowance } = useReadContract({
+    chainId: CHAIN_IDS.baseSepolia,
     address: linkTokenAddress,
     abi: erc20Abi,
     functionName: "allowance",
@@ -171,6 +189,7 @@ export function CreatePoll() {
 
   // Simulate approve (only owner)
   const { data: simulateApprove, error: simulateApproveError } = useSimulateContract({
+    chainId: CHAIN_IDS.baseSepolia,
     address: linkTokenAddress,
     abi: erc20Abi,
     functionName: "approve",
@@ -189,6 +208,7 @@ export function CreatePoll() {
   const { isLoading: isApproveConfirming, isSuccess: isApproveConfirmed } =
     useWaitForTransactionReceipt({
       hash: approveHash,
+      chainId: CHAIN_IDS.baseSepolia,
       query: { enabled: Boolean(approveHash) },
     });
 
@@ -209,9 +229,19 @@ export function CreatePoll() {
     const now = Math.floor(Date.now() / 1000);
     const startTimeWithBuffer = now + START_TIME_BUFFER_SECONDS;
     const startTime = BigInt(startTimeWithBuffer);
-    const endTime = BigInt(startTimeWithBuffer + duration * 24 * 60 * 60);
 
-    const quorumBpsFinal = useQuorum ? quorumBps : 0;
+    const unitSeconds =
+      durationUnit === "minutes" ? 60 : durationUnit === "hours" ? 60 * 60 : 24 * 60 * 60;
+    const maxSeconds = MAX_DURATION_DAYS * 24 * 60 * 60;
+    const rawSeconds = Math.floor(durationValue * unitSeconds);
+    const durationSeconds = Math.min(Math.max(rawSeconds, 60), maxSeconds); // min 1 minute, max 30 days
+
+    const endTime = BigInt(startTimeWithBuffer + durationSeconds);
+
+    // AR: Convert percentage (0-100) to BPS (0-10000) for contract
+    // EN: Convert percentage (0-100) to BPS (0-10000) for contract
+    // Contract validation: if quorumEnabled=true, quorumBps must be > 0 and <= 10000
+    const quorumBpsFinal = useQuorum ? Math.round(quorumPercent * 100) : 0;
 
     return {
       groupId: groupIdBn,
@@ -223,13 +253,14 @@ export function CreatePoll() {
       quorumEnabled: useQuorum,
       quorumBps: BigInt(quorumBpsFinal),
     };
-  }, [groupIdBn, title, cid, options, duration, useQuorum, quorumBps]);
+  }, [groupIdBn, title, cid, options, durationValue, durationUnit, useQuorum, quorumPercent]);
 
   const now = Math.floor(Date.now() / 1000);
   const isStartTimeValid = pollParams ? Number(pollParams.startTime) >= now + 30 : false;
 
   // Simulate createPoll (only owner, params ready + approval satisfied)
   const { data: simulateCreatePoll, error: simulateCreatePollError } = useSimulateContract({
+    chainId: CHAIN_IDS.baseSepolia,
     address: veritasCoreAddress,
     abi: veritasCoreAbi,
     functionName: "createPollWithLinkEscrow",
@@ -259,6 +290,7 @@ export function CreatePoll() {
   const { isLoading: isPollConfirming, isSuccess: isPollConfirmed } =
     useWaitForTransactionReceipt({
       hash: pollHash,
+      chainId: CHAIN_IDS.baseSepolia,
       query: { enabled: Boolean(pollHash) },
     });
 
@@ -286,22 +318,35 @@ export function CreatePoll() {
     setOptions(newOptions);
   };
 
-  const handleApprove = () => {
+  const ensureBaseSepolia = async (): Promise<boolean> => {
+    if (isOnBaseSepolia) return true;
+
+    try {
+      await switchChainAsync({ chainId: CHAIN_IDS.baseSepolia });
+      return true;
+    } catch (err) {
+      console.error("Switch chain failed:", err);
+      toast.error("Network switch was cancelled or failed");
+      return false;
+    }
+  };
+
+  const handleApprove = async () => {
     if (!isConnected) return;
     if (!isGroupOwner) return;
 
-    if (!isOnBaseSepolia) {
-      switchChain.mutate({ chainId: CHAIN_IDS.baseSepolia });
-      return;
-    }
+    const ok = await ensureBaseSepolia();
+    if (!ok) return;
 
     if (simulateApproveError) {
       console.error("Approve simulation failed:", simulateApproveError);
+      toast.error("Approve simulation failed");
       return;
     }
     if (!simulateApprove) return;
 
     approveWrite.mutate({
+      chainId: CHAIN_IDS.baseSepolia,
       address: linkTokenAddress,
       abi: erc20Abi,
       functionName: "approve",
@@ -309,25 +354,25 @@ export function CreatePoll() {
     });
   };
 
-  const handleCreate = () => {
+  const handleCreate = async () => {
     if (!isConnected) return;
     if (!isGroupOwner) return;
 
-    if (!isOnBaseSepolia) {
-      switchChain.mutate({ chainId: CHAIN_IDS.baseSepolia });
-      return;
-    }
+    const ok = await ensureBaseSepolia();
+    if (!ok) return;
 
     if (!approvalSatisfied) return;
     if (!pollParams) return;
 
     if (simulateCreatePollError) {
       console.error("Create poll simulation failed:", simulateCreatePollError);
+      toast.error("Create poll simulation failed");
       return;
     }
     if (!simulateCreatePoll) return;
 
     createPollWrite.mutate({
+      chainId: CHAIN_IDS.baseSepolia,
       address: veritasCoreAddress,
       abi: veritasCoreAbi,
       functionName: "createPollWithLinkEscrow",
@@ -351,20 +396,14 @@ export function CreatePoll() {
         <h1 className="text-3xl font-bold">Create a Poll</h1>
         <Card>
           <CardContent className="pt-6 space-y-3">
-            <div className="text-sm">
-              Only the group owner can create polls for this group.
-            </div>
+            <div className="text-sm">Only the group owner can create polls for this group.</div>
             <div className="text-xs text-muted-foreground">
               Group Owner: {groupOwner.slice(0, 6)}...{groupOwner.slice(-4)}
             </div>
             <div className="text-xs text-muted-foreground">
               Your Address: {connectedAddress.slice(0, 6)}...{connectedAddress.slice(-4)}
             </div>
-            <Button
-              type="button"
-              variant="neon"
-              onClick={() => navigate(`/groups/${groupIdBn.toString()}`)}
-            >
+            <Button type="button" variant="neon" onClick={() => navigate(`/groups/${groupIdBn.toString()}`)}>
               Back to Group
             </Button>
           </CardContent>
@@ -411,11 +450,7 @@ export function CreatePoll() {
                 onChange={(e) => setGroupId(e.target.value)}
                 placeholder="Enter Group ID"
                 disabled={isBusy}
-                error={
-                  groupId.length > 0 && groupIdBn === null
-                    ? "Group ID must be a valid number"
-                    : undefined
-                }
+                error={groupId.length > 0 && groupIdBn === null ? "Group ID must be a valid number" : undefined}
               />
               <Input
                 label="Poll Title"
@@ -434,22 +469,103 @@ export function CreatePoll() {
                 />
               </div>
               <div className="space-y-2">
-                <label className="text-sm font-medium">Duration (Days): {duration}</label>
-                <input
-                  type="range"
-                  min="1"
-                  max="30"
-                  value={duration}
-                  onChange={(e) => setDuration(Number(e.target.value))}
-                  className="w-full"
-                  disabled={isBusy}
-                />
+                <label className="text-sm font-medium">Voting Duration</label>
+                <div className="flex gap-2 items-end">
+                  <div className="flex-1">
+                    <Input
+                      label="Value"
+                      value={String(durationValue)}
+                      onChange={(e) => {
+                        const n = Number(e.target.value);
+                        if (!Number.isFinite(n)) return;
+                        setDurationValue(Math.max(1, Math.floor(n)));
+                      }}
+                      placeholder="e.g. 90"
+                      disabled={isBusy}
+                    />
+                  </div>
+                  <div className="w-40">
+                    <label className="text-sm font-medium">Unit</label>
+                    <select
+                      className="mt-2 w-full h-10 rounded-md border border-input bg-background px-3 text-sm"
+                      value={durationUnit}
+                      onChange={(e) => setDurationUnit(e.target.value as "minutes" | "hours" | "days")}
+                      disabled={isBusy}
+                    >
+                      <option value="minutes">Minutes</option>
+                      <option value="hours">Hours</option>
+                      <option value="days">Days</option>
+                    </select>
+                  </div>
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  Min: 1 minute. Max: 30 days (same cap as before, but you can pick minutes/hours).
+                </p>
               </div>
-              <Button
-                className="w-full"
-                onClick={() => setStep(2)}
-                disabled={!groupIdBn || !title.trim() || isBusy}
-              >
+
+              <div className="space-y-2">
+                <label className="text-sm font-medium">Quorum Settings</label>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    id="useQuorum"
+                    checked={useQuorum}
+                    onChange={(e) => {
+                      setUseQuorum(e.target.checked);
+                      if (!e.target.checked) {
+                        setQuorumPercent(0);
+                      } else if (quorumPercent === 0) {
+                        setQuorumPercent(10); // Default to 10% if enabling
+                      }
+                    }}
+                    disabled={isBusy}
+                    className="h-4 w-4 rounded border-input"
+                  />
+                  <label htmlFor="useQuorum" className="text-sm cursor-pointer">
+                    Enable Quorum (minimum participation requirement)
+                  </label>
+                </div>
+
+                {useQuorum && (
+                  <div className="space-y-2 pl-6">
+                    <Input
+                      label="Quorum (%)"
+                      value={quorumPercent}
+                      onChange={(e) => {
+                        const val = Number(e.target.value);
+                        if (!Number.isFinite(val)) return;
+                        // Allow 0.01% to 100% (0.01 to 100)
+                        const clamped = Math.max(0.01, Math.min(100, val));
+                        setQuorumPercent(clamped);
+                      }}
+                      type="number"
+                      step={0.01}
+                      min={0.01}
+                      max={100}
+                      placeholder="e.g. 10 (means 10%)"
+                      disabled={isBusy}
+                      error={
+                        quorumPercent < 0.01 || quorumPercent > 100
+                          ? "Quorum must be between 0.01% and 100%"
+                          : undefined
+                      }
+                    />
+                    {eligibleCount != null && quorumPercent > 0 && (
+                      <p className="text-xs text-muted-foreground">
+                        Eligible voters: {Number(eligibleCount)}. Required votes:{" "}
+                        {Math.ceil((Number(eligibleCount) * quorumPercent) / 100)}
+                      </p>
+                    )}
+                    {useQuorum && quorumPercent === 0 && (
+                      <p className="text-xs text-red-500">
+                        Quorum must be greater than 0% when quorum is enabled.
+                      </p>
+                    )}
+                  </div>
+                )}
+              </div>
+
+              <Button className="w-full" onClick={() => setStep(2)} disabled={!groupIdBn || !title.trim() || isBusy}>
                 Next: Options <ArrowRight className="ml-2 h-4 w-4" />
               </Button>
             </div>
@@ -468,12 +584,7 @@ export function CreatePoll() {
                       disabled={isBusy}
                     />
                     {options.length > 2 && (
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        onClick={() => handleRemoveOption(idx)}
-                        disabled={isBusy}
-                      >
+                      <Button variant="ghost" size="icon" onClick={() => handleRemoveOption(idx)} disabled={isBusy}>
                         <Trash2 className="h-4 w-4 text-destructive" />
                       </Button>
                     )}
@@ -498,9 +609,7 @@ export function CreatePoll() {
             <div className="space-y-6">
               {isConnected && Boolean(groupIdBn) && Boolean(groupOwner) && !isGroupOwner && (
                 <div className="p-4 bg-red-500/10 border border-red-500/20 rounded-lg">
-                  <p className="text-red-500 text-sm font-medium">
-                    Only the group owner can create polls.
-                  </p>
+                  <p className="text-red-500 text-sm font-medium">Only the group owner can create polls.</p>
                 </div>
               )}
 
@@ -531,9 +640,7 @@ export function CreatePoll() {
                       <span className="text-sm">Generating IPFS CID...</span>
                     </div>
                   ) : (
-                    <p className="text-yellow-500 text-sm">
-                      Failed to generate CID. Please check your description.
-                    </p>
+                    <p className="text-yellow-500 text-sm">Failed to generate CID. Please check your description.</p>
                   )}
                 </div>
               )}
@@ -613,7 +720,6 @@ export function CreatePoll() {
                     disabled={
                       !isConnected ||
                       !isGroupOwner ||
-                      !isOnBaseSepolia ||
                       !approvalSatisfied ||
                       !pollParams ||
                       !cid ||
@@ -648,6 +754,7 @@ export function CreatePoll() {
                   }
                   hash={approveHash}
                   error={approveError}
+                  chainId={CHAIN_IDS.baseSepolia}
                 />
               )}
 
@@ -664,6 +771,7 @@ export function CreatePoll() {
                   }
                   hash={pollHash}
                   error={pollError}
+                  chainId={CHAIN_IDS.baseSepolia}
                 />
               )}
 

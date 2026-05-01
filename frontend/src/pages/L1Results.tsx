@@ -47,12 +47,13 @@ export function L1Results() {
   const data = record.data as unknown as L1RecordView | undefined;
 
   useEffect(() => {
-    if (!data?.recorded) {
-      const id = window.setInterval(() => {
-        void record.refetch();
-      }, 3000);
-      return () => window.clearInterval(id);
-    }
+    if (data?.recorded) return;
+
+    const id = window.setInterval(() => {
+      void record.refetch();
+    }, 3000);
+
+    return () => window.clearInterval(id);
   }, [data?.recorded, record]);
 
   if (!parsed.ok) return <div>Missing groupId or pollId</div>;

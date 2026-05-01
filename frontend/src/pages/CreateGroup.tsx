@@ -1,12 +1,17 @@
-import { useEffect, useMemo, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { useNavigate } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
 import {
   useSimulateContract,
   useWaitForTransactionReceipt,
   useWriteContract,
+  useConnection,
+  useChainId,
+  useSwitchChain,
 } from "wagmi";
 import { veritasCoreAbi, veritasCoreAddress, MembershipType } from "@/lib/veritas";
+import { CHAIN_IDS } from "@/config/contracts";
+
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
 import {
@@ -23,6 +28,7 @@ import {
   type GetTransactionReceiptReturnType,
 } from "viem";
 import { Users, Shield, Ticket } from "lucide-react";
+import { toast } from "@/hooks/useToast";
 
 type Receipt = GetTransactionReceiptReturnType;
 
@@ -59,7 +65,8 @@ function extractGroupIdFromReceipt(receipt?: Receipt): bigint | null {
 
       return decoded.args.groupId;
     } catch {
-      // Ignore logs that don't decode with our ABI.
+      // AR: Ignore logs that don't decode with our ABI.
+      // EN: Ignore logs that don't decode with our ABI.
     }
   }
 
@@ -69,6 +76,29 @@ function extractGroupIdFromReceipt(receipt?: Receipt): bigint | null {
 export function CreateGroup() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+
+  const { address, status } = useConnection();
+  const isConnected = status === "connected";
+
+  const chainId = useChainId();
+  const { switchChainAsync } = useSwitchChain();
+  const isCorrectChain = chainId === CHAIN_IDS.baseSepolia;
+
+  const ensureBaseSepolia = useCallback(async (): Promise<boolean> => {
+    if (chainId === CHAIN_IDS.baseSepolia) return true;
+
+    try {
+      await switchChainAsync({ chainId: CHAIN_IDS.baseSepolia });
+      return true;
+    } catch (err) {
+      console.error("Failed to switch chain:", err);
+      toast.error("Network switch was rejected or failed");
+      return false;
+    }
+  }, [chainId, switchChainAsync]);
+
+  // Prevent duplicate auto setGroupNft sends if the effect re-runs (e.g., after switchChain updates chainId).
+  const setGroupNftInFlightRef = useRef(false);
 
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
@@ -81,13 +111,15 @@ export function CreateGroup() {
   const needsNft = membershipType === MembershipType.NFT;
   const isNftValid = !needsNft || isAddress(nftAddress);
 
-  // Simulate createGroup
+  // Simulate createGroup (always force Base Sepolia)
   const { data: simulateData, error: simulateError } = useSimulateContract({
+    chainId: CHAIN_IDS.baseSepolia,
     address: veritasCoreAddress,
     abi: veritasCoreAbi,
     functionName: "createGroup",
     args: [name, description, membershipType],
-    query: { enabled: isFormReady },
+    account: (address ?? undefined) as `0x${string}` | undefined,
+    query: { enabled: isFormReady && isConnected },
   });
 
   // Create Group Tx
@@ -104,6 +136,7 @@ export function CreateGroup() {
     data: _createReceipt,
   } = useWaitForTransactionReceipt({
     hash: createHash,
+    chainId: CHAIN_IDS.baseSepolia,
     query: { enabled: Boolean(createHash) },
   });
 
@@ -131,11 +164,15 @@ export function CreateGroup() {
   const { isLoading: isSetNftConfirming, isSuccess: isSetNftSuccess } =
     useWaitForTransactionReceipt({
       hash: setNftHash,
+      chainId: CHAIN_IDS.baseSepolia,
       query: { enabled: Boolean(setNftHash) },
     });
 
   const isPending =
-    isCreatePending || isCreateConfirming || isSetNftPending || isSetNftConfirming;
+    isCreatePending ||
+    isCreateConfirming ||
+    isSetNftPending ||
+    isSetNftConfirming;
 
   const isUiLocked =
     isPending || (needsNft ? isCreateSuccess && !isSetNftSuccess : isCreateSuccess);
@@ -147,13 +184,41 @@ export function CreateGroup() {
     if (createdGroupId === null) return;
     if (!isAddress(nftAddress)) return;
     if (setNftHash) return;
+    if (!isConnected || !address) return;
 
-    void setGroupNftAsync({
-      address: veritasCoreAddress,
-      abi: veritasCoreAbi,
-      functionName: "setGroupNft",
-      args: [createdGroupId, nftAddress as `0x${string}`],
-    });
+    // If a previous run is already in flight, don't start another.
+    if (setGroupNftInFlightRef.current) return;
+
+    let cancelled = false;
+
+    const run = async () => {
+      setGroupNftInFlightRef.current = true;
+      try {
+        const ok = await ensureBaseSepolia();
+        if (!ok || cancelled) return;
+
+        // Re-check: if another run already sent the tx while we were switching chains, do nothing.
+        if (setNftHash) return;
+
+        await setGroupNftAsync({
+          chainId: CHAIN_IDS.baseSepolia,
+          address: veritasCoreAddress,
+          abi: veritasCoreAbi,
+          functionName: "setGroupNft",
+          args: [createdGroupId, nftAddress as `0x${string}`],
+        });
+      } catch (err) {
+        console.error("setGroupNft failed:", err);
+        toast.error("Failed to set NFT address");
+      } finally {
+        setGroupNftInFlightRef.current = false;
+      }
+    };
+
+    void run();
+    return () => {
+      cancelled = true;
+    };
   }, [
     isCreateSuccess,
     membershipType,
@@ -161,25 +226,47 @@ export function CreateGroup() {
     nftAddress,
     setNftHash,
     setGroupNftAsync,
+    ensureBaseSepolia,
+    isConnected,
+    address,
   ]);
 
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
 
+    if (!isConnected || !address) {
+      toast.error("Connect your wallet first");
+      return;
+    }
+
+    if (!isFormReady) return;
+    if (!isNftValid) {
+      toast.error("Invalid NFT address");
+      return;
+    }
+
     if (simulateError) {
       console.error("Simulation failed:", simulateError);
+      toast.error("Simulation failed");
       return;
     }
     if (!simulateData) return;
-    if (!isFormReady) return;
-    if (!isNftValid) return;
 
-    await createGroupAsync({
-      address: veritasCoreAddress,
-      abi: veritasCoreAbi,
-      functionName: "createGroup",
-      args: [name, description, membershipType],
-    });
+    const ok = await ensureBaseSepolia();
+    if (!ok) return;
+
+    try {
+      await createGroupAsync({
+        chainId: CHAIN_IDS.baseSepolia,
+        address: veritasCoreAddress,
+        abi: veritasCoreAbi,
+        functionName: "createGroup",
+        args: [name, description, membershipType],
+      });
+    } catch (err) {
+      console.error("createGroup failed:", err);
+      toast.error("Transaction was rejected or failed");
+    }
   };
 
   const isSuccess =
@@ -191,7 +278,6 @@ export function CreateGroup() {
   const hash = setNftHash || createHash;
 
   const goToMyGroups = () => {
-    // Pass createdGroupId as a hint to MyGroups to avoid "one step behind" RPC/cache behavior.
     const state: MyGroupsNavState | undefined =
       createdGroupId !== null ? { createdGroupId: createdGroupId.toString() } : undefined;
 
@@ -205,6 +291,12 @@ export function CreateGroup() {
         <p className="text-muted-foreground">
           Start a new community for voting and governance.
         </p>
+
+        {isConnected && !isCorrectChain ? (
+          <p className="text-xs text-yellow-500">
+            You are on the wrong network. Switch to Base Sepolia to create a group.
+          </p>
+        ) : null}
       </div>
 
       <Card>
@@ -314,6 +406,7 @@ export function CreateGroup() {
               className="w-full"
               size="lg"
               disabled={
+                !isConnected ||
                 isPending ||
                 !simulateData ||
                 !!simulateError ||
@@ -341,6 +434,7 @@ export function CreateGroup() {
             status={isPending ? "pending" : isSuccess ? "success" : error ? "error" : "idle"}
             hash={hash}
             error={error}
+            chainId={CHAIN_IDS.baseSepolia}
           />
 
           {isCreateSuccess && needsNft && !isSetNftSuccess && (
@@ -352,8 +446,7 @@ export function CreateGroup() {
           {isSuccess && (
             <div className="mt-4 p-4 bg-green-500/10 border border-green-500/20 rounded-lg text-center">
               <p className="text-green-500 font-medium mb-2">
-                Group created successfully
-                {needsNft ? " and NFT address set" : ""}!
+                Group created successfully{needsNft ? " and NFT address set" : ""}!
               </p>
 
               {createdGroupId !== null && (
