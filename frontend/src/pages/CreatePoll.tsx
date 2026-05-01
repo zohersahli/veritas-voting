@@ -123,7 +123,7 @@ export function CreatePoll() {
     query: { enabled: Boolean(groupIdBn) && useQuorum },
   });
 
-  const eligibleCount = eligibleCountData != null ? BigInt(eligibleCountData) : null;
+  const eligibleCount = typeof eligibleCountData === "bigint" ? eligibleCountData : null;
 
   // Generate CID from description when description changes (avoid race)
   useEffect(() => {
